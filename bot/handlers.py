@@ -36,6 +36,13 @@ from bot.keyboards import start_task_kb, summary_full_kb, task_done_kb
 
 router = Router()
 
+ONBOARDING_START_TEXT = (
+    "Здравствуйте!\n"
+    "Вас приветствует команда челленджа «30 дней для заявки». Давайте познакомимся!\n\n"
+    "Далее\n"
+    "Укажите Ваше полное Ф.И.О."
+)
+
 ONBOARDING_RULES_TEXT = (
     "Далее\n"
     "Давайте узнаем о правилах челленджа\n\n"
@@ -52,7 +59,7 @@ ONBOARDING_RULES_TEXT = (
     "Обращаем Ваше внимание, что все ваши ответы фиксируются и впоследствии послужат основой для заявки, "
     "поэтому будьте внимательны при подготовке ответов.\n"
     "Готовы превратить «хочу» в «сделал»? Ваш 30-дневный марафон начинается здесь!\n\n"
-    "Поехали!"
+    "Поехали! \n"
 )
 
 
@@ -212,46 +219,15 @@ async def cmd_start(message: Message, settings: Settings, session_factory, state
         user = upsert_user(db, telegram_id=message.from_user.id)
         set_user_admin_flag(db, telegram_id=user.telegram_id, is_admin=(user.telegram_id in settings.admin_ids))
 
-        # If onboarding is not complete, start it and do NOT send tasks yet.
-        if not getattr(user, "onboarded_at", None):
-            await state.clear()
-            await state.set_state(OnboardingFSM.fio)
-            await message.answer(
-                "Здравствуйте!\n"
-                "Вас приветствует команда челленджа «30 дней для заявки». Давайте познакомимся!\n\n"
-                "Далее\n"
-                "Укажите Ваше полное Ф.И.О.",
-                disable_web_page_preview=True,
-                parse_mode=None,
-            )
-            return
-
-        # Normal flow for already onboarded users
-        app = get_app_settings(db)
-        greet = app.greeting_text
-        if getattr(app, "greeting_media_type", None) == "photo" and getattr(app, "greeting_file_id", None):
-            await _safe_send_photo_with_caption(
-                message,
-                file_id=str(app.greeting_file_id),
-                caption=greet,
-                disable_web_page_preview=True,
-            )
-        else:
-            await _safe_send_html(message, greet, disable_web_page_preview=True)
-
-        # ensure progress (minute precision; scheduler checks every 30 seconds)
-        get_or_create_progress(db, user_id=user.id, next_send_at=now_min)
-
-        # first task in ~10 seconds (no extra message)
-        asyncio.create_task(
-            _send_first_task_after_delay(
-                bot=message.bot,
-                session_factory=session_factory,
-                settings=settings,
-                telegram_id=user.telegram_id,
-                delay_sec=10.0,
-            )
+        # /start always begins with onboarding сценарий
+        await state.clear()
+        await state.set_state(OnboardingFSM.fio)
+        await message.answer(
+            ONBOARDING_START_TEXT,
+            disable_web_page_preview=True,
+            parse_mode=None,
         )
+        return
     finally:
         db.close()
 
@@ -342,8 +318,24 @@ async def onboarding_email(message: Message, settings: Settings, session_factory
     finally:
         db.close()
 
+    # Send rules block (admin-editable greeting_text + optional image)
+    db = session_factory()
+    try:
+        app = get_app_settings(db)
+        rules_text = app.greeting_text or ONBOARDING_RULES_TEXT
+        if getattr(app, "greeting_media_type", None) == "photo" and getattr(app, "greeting_file_id", None):
+            await _safe_send_photo_with_caption(
+                message,
+                file_id=str(app.greeting_file_id),
+                caption=rules_text,
+                disable_web_page_preview=True,
+            )
+        else:
+            await _safe_send_html(message, rules_text, disable_web_page_preview=True)
+    finally:
+        db.close()
+
     await state.clear()
-    await message.answer(ONBOARDING_RULES_TEXT, disable_web_page_preview=True, parse_mode=None)
 
     # send the first task soon after onboarding
     asyncio.create_task(
