@@ -29,6 +29,10 @@ class User(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     telegram_id: Mapped[int] = mapped_column(Integer, unique=True, index=True, nullable=False)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    full_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    region: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    email: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    onboarded_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(), nullable=True, index=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(), default=lambda: dt.datetime.now(), nullable=False)
 
 
@@ -155,7 +159,7 @@ def init_db(engine) -> None:
                     rows = conn.exec_driver_sql(f"PRAGMA table_info({table})").fetchall()
                     return {r[1] for r in rows}  # (cid, name, type, notnull, dflt_value, pk)
 
-                expected_users = {"id", "telegram_id", "is_admin", "created_at"}
+                expected_users = {"id", "telegram_id", "is_admin", "full_name", "region", "email", "onboarded_at", "created_at"}
                 expected_posts = {"id", "position", "title", "text_html", "media_type", "file_id", "updated_at"}
                 expected_progress = {
                     "id",
@@ -179,6 +183,21 @@ def init_db(engine) -> None:
                 task_runs_cols = table_columns("task_runs")
                 responses_cols = table_columns("responses")
                 app_settings_cols = table_columns("app_settings")
+
+                # Best-effort non-destructive migration for `users` (ADD COLUMN only).
+                if users_cols and users_cols != expected_users:
+                    missing = expected_users - users_cols
+                    extra = users_cols - expected_users
+                    # If only missing columns (schema extension), ALTER TABLE to keep data.
+                    if missing and not extra:
+                        for col in sorted(missing):
+                            if col in ("full_name", "region", "email"):
+                                conn.exec_driver_sql(f"ALTER TABLE users ADD COLUMN {col} TEXT")
+                            elif col == "onboarded_at":
+                                conn.exec_driver_sql("ALTER TABLE users ADD COLUMN onboarded_at DATETIME")
+                            # id/telegram_id/is_admin/created_at are not expected to be missing here
+                        conn.commit()
+                        users_cols = table_columns("users")
 
                 # Drop in reverse dependency order
                 if responses_cols and responses_cols != expected_responses:

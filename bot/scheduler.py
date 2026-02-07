@@ -54,10 +54,22 @@ async def _send_task_notification(bot: Bot, *, chat_id: int, post: Post) -> None
 
 
 async def _send_summary_prompt(bot: Bot, *, chat_id: int) -> None:
+    final_text = (
+        "День 30.\n"
+        "Поздравляем! Вы только что совершили переход из «родителя с идеей» в «родителя-заявителя». "
+        "Это интересная роль, у вас появились новые умения и навыки, а главное, отличная разработанная идея! "
+        "Какой бы ни был результат, вы уже создали самое главное - план, команду и веру в возможность изменений. "
+        "Теперь вы не просто критики, вы - проектировщики. "
+        "Первые шаги к реализации можно начинать уже сейчас. "
+        "Осталось найти подходящий грантовый конкурс и заполнить заявку по структуре грантодателя. "
+        "Гордимся вами! Так держать!"
+    )
     await bot.send_message(
         chat_id=chat_id,
-        text="Марафон завершён. Хотите посмотреть свои ответы?",
+        text=final_text,
         reply_markup=summary_kb(),
+        parse_mode=None,
+        disable_web_page_preview=True,
     )
 
 
@@ -85,11 +97,20 @@ async def tick(*, bot: Bot, session_factory, settings: Settings) -> None:
             app = get_app_settings(db)
             interval_min = int(app.send_interval_minutes)
             max_posts = count_posts(db)
-            progresses = list(db.scalars(select(Progress).order_by(Progress.next_send_at.asc(), Progress.id.asc())))
+            # Join to users to skip those who haven't completed onboarding yet.
+            rows = list(
+                db.execute(
+                    select(Progress, User.telegram_id, User.onboarded_at)
+                    .join(User, User.id == Progress.user_id)
+                    .order_by(Progress.next_send_at.asc(), Progress.id.asc())
+                ).all()
+            )
 
             last_post = get_post_by_position(db, position=max_posts) if max_posts else None
 
-            for p in progresses:
+            for p, telegram_id, onboarded_at in rows:
+                if not onboarded_at:
+                    continue
                 # close expired response window (and update status fields)
                 if p.active_until and now >= p.active_until:
                     p.active_post_id = None
@@ -107,10 +128,9 @@ async def tick(*, bot: Bot, session_factory, settings: Settings) -> None:
                         .order_by(TaskRun.until.desc(), TaskRun.id.desc())
                     )
                     if last_run and now >= last_run.until:
-                        chat_id = db.scalar(select(User.telegram_id).where(User.id == p.user_id))
-                        if chat_id:
+                        if telegram_id:
                             try:
-                                await _send_summary_prompt(bot, chat_id=int(chat_id))
+                                await _send_summary_prompt(bot, chat_id=int(telegram_id))
                                 p.summary_prompt_sent = True
                                 p.updated_at = dt.datetime.now()
                                 db.commit()
@@ -150,21 +170,20 @@ async def tick(*, bot: Bot, session_factory, settings: Settings) -> None:
                         p.updated_at = dt.datetime.now()
                         db.commit()
 
-                    chat_id = db.scalar(select(User.telegram_id).where(User.id == p.user_id))
-                    if not chat_id:
+                    if not telegram_id:
                         logger.warning("No chat_id for user_id=%s, cannot send post_id=%s", p.user_id, post.id)
                         continue
                     try:
                         logger.info(
                             "Sending due task user_id=%s chat_id=%s position=%s post_id=%s (next_send_at=%s now=%s)",
                             p.user_id,
-                            chat_id,
+                            telegram_id,
                             p.next_position,
                             post.id,
                             p.next_send_at,
                             now,
                         )
-                        await _send_task_notification(bot, chat_id=int(chat_id), post=post)
+                        await _send_task_notification(bot, chat_id=int(telegram_id), post=post)
                         p.pending_post_id = post.id
                         p.next_position += 1
                         p.next_send_at = now_min + dt.timedelta(minutes=interval_min)

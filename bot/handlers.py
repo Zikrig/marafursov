@@ -5,6 +5,8 @@ import asyncio
 from html import escape as _h
 from aiogram import F, Router
 from aiogram.filters import BaseFilter, Command, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 from aiogram.types import BufferedInputFile
 from aiogram.exceptions import TelegramBadRequest
@@ -33,6 +35,31 @@ from bot.db import (
 from bot.keyboards import start_task_kb, summary_full_kb
 
 router = Router()
+
+ONBOARDING_RULES_TEXT = (
+    "Далее\n"
+    "Давайте узнаем о правилах челленджа\n\n"
+    "Далее\n"
+    "Челлендж «30 дней для заявки» поможет Вам за 30 дней пройти путь от идеи до сформированной заявки "
+    "на грантовый конкурс или акселератор или стажировку.\n\n"
+    "Зачем участвовать (Ваша награда)\n"
+    "Система, а не хаос: Вы разобьёте большую и страшную задачу на 30 простых шагов\n"
+    "Дисциплина: Ежедневный ритуал продвинет ваш проект, даже если есть всего 15 минут в день\n"
+    "Результат: Вы сможете создать мощную основу для подачи вашей инициативы на конкурс или просто структурировать ход Ваших мыслей.\n\n"
+    "Главные правила:\n\n"
+    "Челлендж персональный.  Вы идёте в своём темпе, но лучше не пропускать дни подряд.\n"
+    "Можно наверстать. Пропустил день? Бот позволит Вам выполнить прошлое задание.\n"
+    "Обращаем Ваше внимание, что все ваши ответы фиксируются и впоследствии послужат основой для заявки, "
+    "поэтому будьте внимательны при подготовке ответов.\n"
+    "Готовы превратить «хочу» в «сделал»? Ваш 30-дневный марафон начинается здесь!\n\n"
+    "Поехали!"
+)
+
+
+class OnboardingFSM(StatesGroup):
+    fio = State()
+    region = State()
+    email = State()
 
 
 class NotCommand(BaseFilter):
@@ -113,6 +140,9 @@ async def _send_first_task_after_delay(*, bot, session_factory, settings: Settin
         user = get_user_by_telegram_id(db, telegram_id)
         if not user:
             return
+        # Do not send tasks until onboarding is complete
+        if not getattr(user, "onboarded_at", None):
+            return
 
         prog = get_or_create_progress(db, user_id=user.id, next_send_at=now_min)
 
@@ -147,7 +177,7 @@ async def _send_first_task_after_delay(*, bot, session_factory, settings: Settin
 
 
 @router.message(Command("start"))
-async def cmd_start(message: Message, settings: Settings, session_factory):
+async def cmd_start(message: Message, settings: Settings, session_factory, state: FSMContext):
     if not message.from_user:
         return
 
@@ -159,13 +189,26 @@ async def cmd_start(message: Message, settings: Settings, session_factory):
         user = upsert_user(db, telegram_id=message.from_user.id)
         set_user_admin_flag(db, telegram_id=user.telegram_id, is_admin=(user.telegram_id in settings.admin_ids))
 
+        # If onboarding is not complete, start it and do NOT send tasks yet.
+        if not getattr(user, "onboarded_at", None):
+            await state.clear()
+            await state.set_state(OnboardingFSM.fio)
+            await message.answer(
+                "Здравствуйте!\n"
+                "Вас приветствует команда челленджа «30 дней для заявки». Давайте познакомимся!\n\n"
+                "Далее\n"
+                "Укажите Ваше полное Ф.И.О.",
+                disable_web_page_preview=True,
+                parse_mode=None,
+            )
+            return
+
+        # Normal flow for already onboarded users
         app = get_app_settings(db)
         greet = app.greeting_text
-        # greeting is admin-provided; be defensive re: HTML parse errors
         await _safe_send_html(message, greet, disable_web_page_preview=True)
 
-        # ensure progress
-        # minute precision; scheduler checks every 30 seconds
+        # ensure progress (minute precision; scheduler checks every 30 seconds)
         get_or_create_progress(db, user_id=user.id, next_send_at=now_min)
 
         # first task in ~10 seconds (no extra message)
@@ -181,6 +224,106 @@ async def cmd_start(message: Message, settings: Settings, session_factory):
     finally:
         db.close()
 
+
+@router.message(Command("cancel"), StateFilter(OnboardingFSM))
+async def cmd_cancel(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("✅ Ок, отменено.", parse_mode=None)
+
+
+@router.message(OnboardingFSM.fio)
+async def onboarding_fio(message: Message, settings: Settings, session_factory, state: FSMContext):
+    if not message.from_user:
+        return
+    fio = _extract_text_or_caption(message)
+    if len(fio) < 5:
+        await message.answer("Пожалуйста, укажите полное Ф.И.О. (хотя бы 5 символов).")
+        return
+    db = session_factory()
+    try:
+        user = get_user_by_telegram_id(db, message.from_user.id)
+        if not user:
+            user = upsert_user(db, telegram_id=message.from_user.id)
+        user.full_name = fio.strip()
+        db.commit()
+    finally:
+        db.close()
+    await state.set_state(OnboardingFSM.region)
+    await message.answer("Далее\nУкажите Ваш регион", parse_mode=None)
+
+
+@router.message(OnboardingFSM.region)
+async def onboarding_region(message: Message, settings: Settings, session_factory, state: FSMContext):
+    if not message.from_user:
+        return
+    region = _extract_text_or_caption(message)
+    if len(region) < 2:
+        await message.answer("Пожалуйста, укажите регион (хотя бы 2 символа).")
+        return
+    db = session_factory()
+    try:
+        user = get_user_by_telegram_id(db, message.from_user.id)
+        if not user:
+            user = upsert_user(db, telegram_id=message.from_user.id)
+        user.region = region.strip()
+        db.commit()
+    finally:
+        db.close()
+    await state.set_state(OnboardingFSM.email)
+    await message.answer("Далее\nУкажите Вашу электронную почту", parse_mode=None)
+
+
+def _looks_like_email(s: str) -> bool:
+    s = (s or "").strip()
+    if " " in s:
+        return False
+    if s.count("@") != 1:
+        return False
+    local, domain = s.split("@", 1)
+    if not local or "." not in domain:
+        return False
+    return True
+
+
+@router.message(OnboardingFSM.email)
+async def onboarding_email(message: Message, settings: Settings, session_factory, state: FSMContext):
+    if not message.from_user:
+        return
+    email = _extract_text_or_caption(message)
+    if not _looks_like_email(email):
+        await message.answer("Пожалуйста, укажите корректный email (например: name@example.com).")
+        return
+
+    now = _tznow(settings)
+    now_min = _floor_to_minute(now)
+
+    db = session_factory()
+    try:
+        user = get_user_by_telegram_id(db, message.from_user.id)
+        if not user:
+            user = upsert_user(db, telegram_id=message.from_user.id)
+        user.email = email.strip()
+        user.onboarded_at = now_min
+        db.commit()
+
+        # ensure progress right after onboarding
+        get_or_create_progress(db, user_id=user.id, next_send_at=now_min)
+    finally:
+        db.close()
+
+    await state.clear()
+    await message.answer(ONBOARDING_RULES_TEXT, disable_web_page_preview=True, parse_mode=None)
+
+    # send the first task soon after onboarding
+    asyncio.create_task(
+        _send_first_task_after_delay(
+            bot=message.bot,
+            session_factory=session_factory,
+            settings=settings,
+            telegram_id=message.from_user.id,
+            delay_sec=2.0,
+        )
+    )
 
 @router.message(Command("null"))
 async def cmd_null(message: Message, settings: Settings, session_factory):

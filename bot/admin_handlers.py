@@ -560,7 +560,14 @@ async def admin_export_all_summaries_xlsx(call: CallbackQuery, settings: Setting
     ws = wb.active
     ws.title = "summaries"
 
-    headers = ["telegram_id", "username"] + [f"День {p.position}. {p.title}" for p in posts]
+    headers = [
+        "telegram_id",
+        "username",
+        "full_name",
+        "region",
+        "email",
+        "onboarded_at",
+    ] + [f"День {p.position}. {p.title}" for p in posts]
     ws.append(headers)
 
     for u in users:
@@ -572,7 +579,14 @@ async def admin_export_all_summaries_xlsx(call: CallbackQuery, settings: Setting
         except Exception:
             username = ""
 
-        row: list[object] = [int(u.telegram_id), username]
+        row: list[object] = [
+            int(u.telegram_id),
+            username,
+            (getattr(u, "full_name", None) or ""),
+            (getattr(u, "region", None) or ""),
+            (getattr(u, "email", None) or ""),
+            getattr(u, "onboarded_at", None) or "",
+        ]
         for p in posts:
             parts = answers.get((int(u.id), int(p.id)), [])
             cell = "\n".join([s.strip() for s in parts if (s or "").strip()])
