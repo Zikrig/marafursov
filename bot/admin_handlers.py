@@ -268,7 +268,7 @@ async def admin_final_text(call: CallbackQuery, settings: Settings, state: FSMCo
     db = session_factory()
     try:
         s = get_app_settings(db)
-        current = s.final_text
+        current = s.final_text or ""
     finally:
         db.close()
     await state.clear()
