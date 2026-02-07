@@ -116,6 +116,8 @@ async def tick(*, bot: Bot, session_factory, settings: Settings) -> None:
                     p.active_post_id = None
                     p.active_started_at = None
                     p.active_until = None
+                    # next task becomes available after send interval FROM close time
+                    p.next_send_at = now_min + dt.timedelta(minutes=interval_min)
                     p.updated_at = dt.datetime.now()
                     db.commit()
 
@@ -145,6 +147,10 @@ async def tick(*, bot: Bot, session_factory, settings: Settings) -> None:
                         p.next_send_at = floored
                         p.updated_at = dt.datetime.now()
                         db.commit()
+
+                # only one task at a time: don't issue a new one while there is pending/active
+                if p.pending_post_id or p.active_post_id:
+                    continue
 
                 if p.next_position <= max_posts and p.next_send_at <= now_min:
                     post = get_post_by_position(db, position=p.next_position)
@@ -186,7 +192,7 @@ async def tick(*, bot: Bot, session_factory, settings: Settings) -> None:
                         await _send_task_notification(bot, chat_id=int(telegram_id), post=post)
                         p.pending_post_id = post.id
                         p.next_position += 1
-                        p.next_send_at = now_min + dt.timedelta(minutes=interval_min)
+                        # next_send_at will be computed from task close time (done/limit/timeout)
                         p.updated_at = dt.datetime.now()
                         db.commit()
                     except Exception:

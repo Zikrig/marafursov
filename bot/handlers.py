@@ -32,7 +32,7 @@ from bot.db import (
     set_user_admin_flag,
     upsert_user,
 )
-from bot.keyboards import start_task_kb, summary_full_kb
+from bot.keyboards import start_task_kb, summary_full_kb, task_done_kb
 
 router = Router()
 
@@ -79,6 +79,19 @@ def _floor_to_minute(t: dt.datetime) -> dt.datetime:
 
 def _extract_text_or_caption(message: Message) -> str:
     return (message.text or message.caption or "").strip()
+
+
+def _fmt_wait_minutes(m: int) -> str:
+    """
+    User-facing duration formatting:
+    - if < 100 minutes -> show minutes
+    - else -> show floor(hours) ("нацело на 60")
+    """
+    m = int(m)
+    if m < 100:
+        return f"{m} минут"
+    h = m // 60
+    return f"{h} часов"
 
 async def _safe_send_html(message: Message, text: str, **kwargs) -> None:
     """
@@ -169,7 +182,7 @@ async def _send_first_task_after_delay(*, bot, session_factory, settings: Settin
 
         prog.pending_post_id = post.id
         prog.next_position = 2
-        prog.next_send_at = now_min + dt.timedelta(minutes=int(app.send_interval_minutes))
+        # next_send_at will be computed from task close time (done/limit/timeout)
         prog.updated_at = dt.datetime.now()
         db.commit()
     finally:
@@ -395,7 +408,7 @@ async def start_task_callback(call: CallbackQuery, settings: Settings, session_f
             until = now + dt.timedelta(minutes=int(app.response_window_minutes))
             create_task_run(db, user_id=user.id, post_id=post.id, started_at=now, until=until)
 
-        window_text = f"{int(app.response_window_minutes)} минут"
+        window_text = _fmt_wait_minutes(int(app.response_window_minutes))
         # Keep Progress in sync (for status UI + "one active task" guard)
         if prog.pending_post_id == post.id:
             prog.pending_post_id = None
@@ -478,11 +491,38 @@ async def capture_user_answer(message: Message, settings: Settings, session_fact
             return
 
         add_response(db, run_id=target_run.id, user_id=user.id, post_id=post.id, text=txt)
-        await message.answer(f"Спасибо за ответ на ({_h(post.title)})")
 
-        # if this was the 3rd answer, silently close the run
+        app = get_app_settings(db)
+        interval_text = _fmt_wait_minutes(int(app.send_interval_minutes))
+        remaining = max(0, int(settings.max_responses_per_task) - (current_cnt + 1))
+
+        # if this was the last allowed answer -> close and schedule next from close time
         if current_cnt + 1 >= settings.max_responses_per_task:
             close_run_now(db, run_id=target_run.id, now=now)
+            prog = db.scalar(select(Progress).where(Progress.user_id == user.id))
+            if prog:
+                prog.active_post_id = None
+                prog.active_started_at = None
+                prog.active_until = None
+                prog.pending_post_id = None
+                prog.next_send_at = _floor_to_minute(now) + dt.timedelta(minutes=int(app.send_interval_minutes))
+                prog.updated_at = dt.datetime.now()
+                db.commit()
+            await message.answer(
+                f"Спасибо! Ваш ответ записан.\n"
+                f"Задание закрыто.\n"
+                f"Следующее задание станет доступным через {interval_text}.",
+                parse_mode=None,
+            )
+            return
+
+        await message.answer(
+            f"Спасибо! Ваш ответ записан.\n"
+            f"Можно отправить ещё {remaining} сообщ.\n"
+            f"Следующее задание станет доступным через {interval_text} после завершения задания.",
+            reply_markup=task_done_kb(post_id=post.id),
+            parse_mode=None,
+        )
     finally:
         db.close()
 
@@ -527,9 +567,81 @@ async def capture_user_answer_reply_always(message: Message, settings: Settings,
             close_run_now(db, run_id=run.id, now=now)
             return
         add_response(db, run_id=run.id, user_id=user.id, post_id=post.id, text=txt)
-        await message.answer(f"Спасибо за ответ на ({_h(post.title)})")
+
+        app = get_app_settings(db)
+        interval_text = _fmt_wait_minutes(int(app.send_interval_minutes))
+        remaining = max(0, int(settings.max_responses_per_task) - (current_cnt + 1))
+
         if current_cnt + 1 >= settings.max_responses_per_task:
             close_run_now(db, run_id=run.id, now=now)
+            prog = db.scalar(select(Progress).where(Progress.user_id == user.id))
+            if prog:
+                prog.active_post_id = None
+                prog.active_started_at = None
+                prog.active_until = None
+                prog.pending_post_id = None
+                prog.next_send_at = _floor_to_minute(now) + dt.timedelta(minutes=int(app.send_interval_minutes))
+                prog.updated_at = dt.datetime.now()
+                db.commit()
+            await message.answer(
+                f"Спасибо! Ваш ответ записан.\n"
+                f"Задание закрыто.\n"
+                f"Следующее задание станет доступным через {interval_text}.",
+                parse_mode=None,
+            )
+            return
+
+        await message.answer(
+            f"Спасибо! Ваш ответ записан.\n"
+            f"Можно отправить ещё {remaining} сообщ.\n"
+            f"Следующее задание станет доступным через {interval_text} после завершения задания.",
+            reply_markup=task_done_kb(post_id=post.id),
+            parse_mode=None,
+        )
+    finally:
+        db.close()
+
+
+@router.callback_query(F.data.startswith("task:done:"))
+async def task_done_callback(call: CallbackQuery, settings: Settings, session_factory):
+    if not call.from_user:
+        return
+    post_id = int(call.data.split(":", 2)[2])
+    now = _tznow(settings)
+    now_min = _floor_to_minute(now)
+
+    db = session_factory()
+    try:
+        user = get_user_by_telegram_id(db, call.from_user.id)
+        if not user:
+            await call.answer("Пользователь не найден", show_alert=True)
+            return
+        app = get_app_settings(db)
+        interval_text = _fmt_wait_minutes(int(app.send_interval_minutes))
+
+        run = get_latest_open_run_for_post(db, user_id=user.id, post_id=post_id, now=now)
+        if not run:
+            await call.answer("Задание уже закрыто или окно ответа истекло.", show_alert=True)
+            return
+
+        close_run_now(db, run_id=run.id, now=now)
+        prog = db.scalar(select(Progress).where(Progress.user_id == user.id))
+        if prog:
+            if prog.active_post_id == post_id:
+                prog.active_post_id = None
+                prog.active_started_at = None
+                prog.active_until = None
+            prog.pending_post_id = None
+            prog.next_send_at = now_min + dt.timedelta(minutes=int(app.send_interval_minutes))
+            prog.updated_at = dt.datetime.now()
+            db.commit()
+
+        await call.message.answer(
+            f"✅ Готово! Задание закрыто.\n"
+            f"Следующее задание станет доступным через {interval_text}.",
+            parse_mode=None,
+        )
+        await call.answer()
     finally:
         db.close()
 

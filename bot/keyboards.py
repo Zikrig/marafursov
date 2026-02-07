@@ -8,6 +8,12 @@ def start_task_kb(*, post_id: int) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def task_done_kb(*, post_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="✅ Готово", callback_data=f"task:done:{post_id}"))
+    return kb.as_markup()
+
+
 def summary_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="Посмотреть мои ответы", callback_data="summary:show"))
