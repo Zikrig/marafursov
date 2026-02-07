@@ -238,7 +238,7 @@ async def onboarding_fio(message: Message, settings: Settings, session_factory, 
     finally:
         db.close()
     await state.set_state(OnboardingFSM.region)
-    await message.answer("Далее\nУкажите Ваш регион", parse_mode=None)
+    await message.answer("Укажите Ваш регион", parse_mode=None)
 
 
 @router.message(OnboardingFSM.region)
@@ -259,7 +259,7 @@ async def onboarding_region(message: Message, settings: Settings, session_factor
     finally:
         db.close()
     await state.set_state(OnboardingFSM.email)
-    await message.answer("Далее\nУкажите Вашу электронную почту", parse_mode=None)
+    await message.answer("кажите Вашу электронную почту", parse_mode=None)
 
 
 def _looks_like_email(s: str) -> bool:
