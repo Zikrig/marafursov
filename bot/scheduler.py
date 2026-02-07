@@ -166,7 +166,7 @@ async def tick(*, bot: Bot, session_factory, settings: Settings) -> None:
                                 await _send_summary_prompt(
                                     bot,
                                     chat_id=int(telegram_id),
-                                    text_value=str(app.final_text),
+                                    text_value=str((getattr(app, "final_text", None) or "")).strip() or "Марафон завершён. Хотите посмотреть свои ответы?",
                                     media_type=getattr(app, "final_media_type", None),
                                     file_id=getattr(app, "final_file_id", None),
                                 )
