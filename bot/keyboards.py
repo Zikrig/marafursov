@@ -27,6 +27,7 @@ def admins_menu_kb() -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="⏱ Окно ответа", callback_data="admin:resp_window"))
     kb.row(InlineKeyboardButton(text="⏲ Интервал рассылки", callback_data="admin:send_interval"))
     kb.row(InlineKeyboardButton(text="📄 Моя сводка", callback_data="admin:summary:me"))
+    kb.row(InlineKeyboardButton(text="📊 Сводки всех (Excel)", callback_data="admin:export:xlsx"))
     kb.row(InlineKeyboardButton(text="➕ Создать пост", callback_data="admin:create"))
     kb.row(
         InlineKeyboardButton(text="🔄 Сбросить (я)", callback_data="admin:reset:me"),

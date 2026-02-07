@@ -1,4 +1,5 @@
 import datetime as dt
+import io
 from zoneinfo import ZoneInfo
 
 from html import escape as _h
@@ -8,12 +9,15 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 from aiogram.types import BufferedInputFile
-from sqlalchemy import select
+from openpyxl import Workbook
+from sqlalchemy import func, select
 
 from bot.config import Settings
 from bot.db import (
     Post,
     Progress,
+    Response,
+    TaskRun,
     User,
     count_posts,
     create_post,
@@ -27,9 +31,11 @@ from bot.db import (
     move_post,
     delete_task_runs_for_user,
     reset_progress,
+    set_user_admin_flag,
     set_greeting_text,
     set_response_window_minutes,
     set_send_interval_minutes,
+    upsert_user,
     update_post,
 )
 from bot.keyboards import (
@@ -57,7 +63,12 @@ async def _render_admin_menu_text(*, telegram_id: int, session_factory) -> str:
     try:
         s = get_app_settings(db)
         u = db.scalar(select(User).where(User.telegram_id == telegram_id))
-        prog = db.scalar(select(Progress).where(Progress.user_id == u.id)) if u else None
+        if not u:
+            u = upsert_user(db, telegram_id=telegram_id)
+            set_user_admin_flag(db, telegram_id=telegram_id, is_admin=True)
+        # Ensure progress always exists for admins menu (never show "нет")
+        now = dt.datetime.now().replace(second=0, microsecond=0)
+        prog = get_or_create_progress(db, user_id=u.id, next_send_at=now)
         total_posts = count_posts(db)
     finally:
         db.close()
@@ -189,7 +200,12 @@ async def admin_save_resp_window(message: Message, settings: Settings, state: FS
     try:
         minutes = int(raw)
     except Exception:
-        await message.answer("Нужно целое число минут. Пришлите ещё раз:")
+        await message.answer(
+            "Вы сейчас в настройках (ожидаю <b>число минут</b>).\n\n"
+            "- **Отменить**: /cancel\n"
+            "- **Ответить на задание**: отправьте ответ <b>реплаем</b> на сообщение «День X…»",
+            disable_web_page_preview=True,
+        )
         return
     db = session_factory()
     try:
@@ -264,6 +280,84 @@ async def admin_summary_me(call: CallbackQuery, settings: Settings, session_fact
     await call.answer()
 
 
+def _truncate_excel_cell(s: str, limit: int = 32000) -> str:
+    s = (s or "").replace("\r\n", "\n").replace("\r", "\n")
+    if len(s) <= limit:
+        return s
+    return s[: max(0, limit - 1)].rstrip() + "…"
+
+
+@admin_router.callback_query(F.data == "admin:export:xlsx")
+async def admin_export_all_summaries_xlsx(call: CallbackQuery, settings: Settings, session_factory):
+    if not _is_admin(call.from_user.id if call.from_user else None, settings):
+        await call.answer("Нет доступа", show_alert=True)
+        return
+
+    await call.answer("Готовлю Excel…")
+
+    db = session_factory()
+    try:
+        posts = list(db.scalars(select(Post).order_by(Post.position.asc(), Post.id.asc())))
+        users = list(db.scalars(select(User).order_by(User.id.asc(), User.telegram_id.asc())))
+
+        # Latest run per (user, post) by started_at
+        latest = (
+            select(
+                TaskRun.user_id.label("user_id"),
+                TaskRun.post_id.label("post_id"),
+                func.max(TaskRun.started_at).label("max_started_at"),
+            )
+            .group_by(TaskRun.user_id, TaskRun.post_id)
+            .subquery()
+        )
+        latest_runs = (
+            select(TaskRun.id.label("run_id"), TaskRun.user_id.label("user_id"), TaskRun.post_id.label("post_id"))
+            .join(
+                latest,
+                (TaskRun.user_id == latest.c.user_id)
+                & (TaskRun.post_id == latest.c.post_id)
+                & (TaskRun.started_at == latest.c.max_started_at),
+            )
+            .subquery()
+        )
+
+        rows = db.execute(
+            select(latest_runs.c.user_id, latest_runs.c.post_id, Response.seq, Response.text)
+            .join(Response, Response.run_id == latest_runs.c.run_id)
+            .order_by(latest_runs.c.user_id.asc(), latest_runs.c.post_id.asc(), Response.seq.asc(), Response.id.asc())
+        ).all()
+    finally:
+        db.close()
+
+    answers: dict[tuple[int, int], list[str]] = {}
+    for user_id, post_id, _seq, text in rows:
+        answers.setdefault((int(user_id), int(post_id)), []).append(text or "")
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "summaries"
+
+    headers = ["telegram_id"] + [f"День {p.position}. {p.title}" for p in posts]
+    ws.append(headers)
+
+    for u in users:
+        row: list[object] = [int(u.telegram_id)]
+        for p in posts:
+            parts = answers.get((int(u.id), int(p.id)), [])
+            cell = "\n".join([s.strip() for s in parts if (s or "").strip()])
+            row.append(_truncate_excel_cell(cell))
+        ws.append(row)
+
+    ws.freeze_panes = "A2"
+
+    out = io.BytesIO()
+    wb.save(out)
+    out.seek(0)
+
+    filename = f"summaries_{dt.datetime.now().strftime('%Y-%m-%d_%H-%M')}.xlsx"
+    await call.message.answer_document(BufferedInputFile(out.getvalue(), filename=filename))
+
+
 @admin_router.message(AdminEditFSM.send_interval)
 async def admin_save_send_interval(message: Message, settings: Settings, state: FSMContext, session_factory):
     if not _is_admin(message.from_user.id if message.from_user else None, settings):
@@ -272,7 +366,12 @@ async def admin_save_send_interval(message: Message, settings: Settings, state: 
     try:
         minutes = int(raw)
     except Exception:
-        await message.answer("Нужно целое число минут. Пришлите ещё раз:")
+        await message.answer(
+            "Вы сейчас в настройках (ожидаю <b>число минут</b>).\n\n"
+            "- **Отменить**: /cancel\n"
+            "- **Ответить на задание**: отправьте ответ <b>реплаем</b> на сообщение «День X…»",
+            disable_web_page_preview=True,
+        )
         return
     db = session_factory()
     try:
