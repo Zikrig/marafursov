@@ -63,14 +63,18 @@ async def _safe_send_html(message: Message, text: str, **kwargs) -> None:
         raise
 
 def _summary_text_for_post(*, post, responses) -> str:
-    # "вопрос" = название дня/темы
-    body = f"<b>День {post.position}. {_h(post.title)}</b>\n\n"
+    """
+    Plain-text summary (no HTML) to avoid parse errors on arbitrary user content
+    and to keep truncation safe.
+    """
+    title = (post.title or "").strip()
+    body = f"День {post.position}. {title}\n\n"
+    body += "Ответ(ы):\n"
     if responses:
-        body += "<b>Ответ(ы):</b>\n"
         for r in responses:
-            body += f"- {_h(r.text)}\n"
+            body += f"- {(r.text or '').strip()}\n"
     else:
-        body += "<b>Ответ(ы):</b>\n- —\n"
+        body += "- —\n"
     return body
 
 
@@ -81,10 +85,15 @@ async def _send_summary_item(message_like, *, post, responses, truncate_to: int 
     """
     full = _summary_text_for_post(post=post, responses=responses)
     if len(full) <= truncate_to:
-        await message_like.answer(full, disable_web_page_preview=True)
+        await message_like.answer(full, disable_web_page_preview=True, parse_mode=None)
         return
     short = full[: max(0, truncate_to - 1)].rstrip() + "…"
-    await message_like.answer(short, disable_web_page_preview=True, reply_markup=summary_full_kb(post_id=post.id))
+    await message_like.answer(
+        short,
+        disable_web_page_preview=True,
+        reply_markup=summary_full_kb(post_id=post.id),
+        parse_mode=None,
+    )
 
 
 async def _send_first_task_after_delay(*, bot, session_factory, settings: Settings, telegram_id: int, delay_sec: float) -> None:
@@ -226,22 +235,32 @@ async def start_task_callback(call: CallbackQuery, settings: Settings, session_f
 
         prog = get_or_create_progress(db, user_id=user.id, next_send_at=now)
 
-        # Start is allowed only for the latest teaser we sent (pending)
-        if prog.pending_post_id != post.id:
-            await call.answer("Это задание уже неактуально или ещё не выдано.", show_alert=True)
+        # Allow starting:
+        # - current pending teaser
+        # - any previously issued teaser (position < next_position), even if a newer teaser is pending
+        #
+        # This prevents "button suddenly invalid" when scheduler issued a newer task before user clicked.
+        if prog.pending_post_id != post.id and post.position >= prog.next_position:
+            # still not issued to the user (or invalid callback)
+            await call.answer("Не получилось открыть задание.", show_alert=True)
             return
 
-        # only one active task at a time
-        if prog.active_post_id and prog.active_until and now < prog.active_until:
-            await call.answer("У вас уже есть активное задание. Сначала закончите его.", show_alert=True)
-            return
+        # "active task" is just a UI guard; do not block starting another one.
+        # Old runs stay open by their own `until` timer and can still be answered via reply-to.
+        if prog.active_post_id is not None:
+            prog.active_post_id = None
+            prog.active_started_at = None
+            prog.active_until = None
+            prog.updated_at = dt.datetime.now()
+            db.commit()
 
         app = get_app_settings(db)
         until = now + dt.timedelta(minutes=int(app.response_window_minutes))
         window_text = f"{int(app.response_window_minutes)} минут"
         create_task_run(db, user_id=user.id, post_id=post.id, started_at=now, until=until)
         # Keep Progress in sync (for status UI + "one active task" guard)
-        prog.pending_post_id = None
+        if prog.pending_post_id == post.id:
+            prog.pending_post_id = None
         prog.active_post_id = post.id
         prog.active_started_at = now
         prog.active_until = until
@@ -396,7 +415,7 @@ async def show_summary(call: CallbackQuery, settings: Settings, session_factory)
         await call.answer()
         return
 
-    await call.message.answer("<b>Ваши ответы по дням</b>", disable_web_page_preview=True)
+    await call.message.answer("Ваши ответы по дням", disable_web_page_preview=True, parse_mode=None)
     for post, responses in items:
         await _send_summary_item(call.message, post=post, responses=responses, truncate_to=500)
     await call.answer()
@@ -430,10 +449,9 @@ async def show_summary_full(call: CallbackQuery, settings: Settings, session_fac
     full = _summary_text_for_post(post=post, responses=responses)
 
     # If too long for Telegram, send as file
-    if len(full) > 3900:
-        data = full.replace("<b>", "").replace("</b>", "")
-        buf = BufferedInputFile(data.encode("utf-8"), filename=f"day_{post.position}.txt")
-        await call.message.answer_document(buf, caption=f"День {post.position}. {_h(post.title)}")
+    if len(full) > 3500:
+        buf = BufferedInputFile(full.encode("utf-8"), filename=f"day_{post.position}.txt")
+        await call.message.answer_document(buf, caption=f"День {post.position}. {(post.title or '').strip()}")
     else:
-        await call.message.answer(full, disable_web_page_preview=True)
+        await call.message.answer(full, disable_web_page_preview=True, parse_mode=None)
     await call.answer()

@@ -361,7 +361,7 @@ async def admin_open_post(call: CallbackQuery, settings: Settings, session_facto
         await call.answer("Пост не найден", show_alert=True)
         return
     body = (
-        f"<b>День {post.position}. {post.title}</b>\n"
+        f"<b>День {post.position}. {_h(post.title)}</b>\n"
         f"Медиа: <b>{post.media_type or 'нет'}</b>\n\n"
         f"{post.text_html}"
     )
@@ -528,7 +528,7 @@ async def admin_create_media(message: Message, settings: Settings, state: FSMCon
         db.close()
 
     await state.clear()
-    await message.answer(f"✅ Создан пост: День {post.position}. {post.title}")
+    await message.answer(f"✅ Создан пост: День {post.position}. {_h(post.title)}")
 
 
 @admin_router.callback_query(F.data == "admin:reset:me")
