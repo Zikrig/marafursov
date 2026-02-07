@@ -560,13 +560,13 @@ async def admin_reset_all(call: CallbackQuery, settings: Settings, session_facto
     now = _tznow(settings)
     db = session_factory()
     try:
-        admins = list(db.scalars(select(User).where(User.is_admin == True)))  # noqa: E712
-        for u in admins:
+        users = list(db.scalars(select(User)))
+        for u in users:
             delete_task_runs_for_user(db, user_id=u.id)
             reset_progress(db, user_id=u.id, next_send_at=now + dt.timedelta(seconds=10))
     finally:
         db.close()
-    await call.answer("Сброшено для всех админов ✅", show_alert=True)
+    await call.answer("Сброшено для всех ✅", show_alert=True)
     text = await _render_admin_menu_text(telegram_id=call.from_user.id, session_factory=session_factory)
     await call.message.edit_text(text, reply_markup=admins_menu_kb())
 

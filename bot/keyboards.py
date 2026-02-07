@@ -30,7 +30,7 @@ def admins_menu_kb() -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="➕ Создать пост", callback_data="admin:create"))
     kb.row(
         InlineKeyboardButton(text="🔄 Сбросить (я)", callback_data="admin:reset:me"),
-        InlineKeyboardButton(text="🔄 Сбросить (все админы)", callback_data="admin:reset:all"),
+        InlineKeyboardButton(text="🔄 Сбросить (все)", callback_data="admin:reset:all"),
     )
     return kb.as_markup()
 
