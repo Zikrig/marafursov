@@ -50,6 +50,7 @@ from bot.keyboards import (
     admin_broadcast_confirm_kb,
     admins_menu_kb,
     admins_posts_list_kb,
+    admin_greeting_final_kb,
 )
 
 admin_router = Router()
@@ -365,6 +366,16 @@ async def admin_send_interval(call: CallbackQuery, settings: Settings, state: FS
         f"Текущий интервал рассылки: <b>{current} мин</b>\n\n"
         "Пришлите новое значение (целое число минут, минимум 1):"
     )
+    await call.answer()
+
+
+@admin_router.callback_query(F.data == "admin:greeting_final")
+async def admin_greeting_final(call: CallbackQuery, settings: Settings, state: FSMContext):
+    if not _is_admin(call.from_user.id if call.from_user else None, settings):
+        await call.answer("Нет доступа", show_alert=True)
+        return
+    await state.clear()
+    await call.message.answer("<b>Приветствие / Финал</b>\n\nВыберите, что редактировать:", reply_markup=admin_greeting_final_kb())
     await call.answer()
 
 

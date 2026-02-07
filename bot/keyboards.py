@@ -29,12 +29,9 @@ def summary_full_kb(*, post_id: int) -> InlineKeyboardMarkup:
 def admins_menu_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="📋 Посты", callback_data="admin:list:0"))
-    kb.row(InlineKeyboardButton(text="✉️ Приветствие", callback_data="admin:greeting"))
-    kb.row(InlineKeyboardButton(text="🖼 Приветствие (картинка)", callback_data="admin:greeting_media"))
+    kb.row(InlineKeyboardButton(text="👋 Приветствие/финал", callback_data="admin:greeting_final"))
     kb.row(InlineKeyboardButton(text="⏱ Окно ответа", callback_data="admin:resp_window"))
     kb.row(InlineKeyboardButton(text="⏲ Интервал рассылки", callback_data="admin:send_interval"))
-    kb.row(InlineKeyboardButton(text="🏁 Финал", callback_data="admin:final"))
-    kb.row(InlineKeyboardButton(text="🖼 Финал (картинка)", callback_data="admin:final_media"))
     kb.row(InlineKeyboardButton(text="📄 Моя сводка", callback_data="admin:summary:me"))
     kb.row(InlineKeyboardButton(text="📊 Сводки всех (Excel)", callback_data="admin:export:xlsx"))
     kb.row(InlineKeyboardButton(text="📣 Рассылка всем", callback_data="admin:broadcast:start"))
@@ -52,6 +49,16 @@ def admin_broadcast_confirm_kb() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="✅ Отправить всем", callback_data="admin:broadcast:send"),
         InlineKeyboardButton(text="❌ Отмена", callback_data="admin:broadcast:cancel"),
     )
+    return kb.as_markup()
+
+
+def admin_greeting_final_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="✉️ Приветствие (текст)", callback_data="admin:greeting"))
+    kb.row(InlineKeyboardButton(text="🖼 Приветствие (картинка)", callback_data="admin:greeting_media"))
+    kb.row(InlineKeyboardButton(text="🏁 Финал (текст)", callback_data="admin:final"))
+    kb.row(InlineKeyboardButton(text="🖼 Финал (картинка)", callback_data="admin:final_media"))
+    kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:menu"))
     return kb.as_markup()
 
 
