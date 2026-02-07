@@ -296,7 +296,15 @@ def get_user_by_telegram_id(db: Session, telegram_id: int) -> Optional[User]:
 def get_or_create_progress(db: Session, *, user_id: int, next_send_at: dt.datetime) -> Progress:
     p = db.scalar(select(Progress).where(Progress.user_id == user_id))
     if p:
+        # Keep minute precision for scheduling
+        if p.next_send_at:
+            floored = p.next_send_at.replace(second=0, microsecond=0)
+            if floored != p.next_send_at:
+                p.next_send_at = floored
+                p.updated_at = dt.datetime.now()
+                db.commit()
         return p
+    next_send_at = next_send_at.replace(second=0, microsecond=0)
     p = Progress(user_id=user_id, next_position=1, next_send_at=next_send_at)
     db.add(p)
     db.commit()
@@ -306,11 +314,12 @@ def get_or_create_progress(db: Session, *, user_id: int, next_send_at: dt.dateti
 def reset_progress(db: Session, *, user_id: int, next_send_at: dt.datetime) -> None:
     p = db.scalar(select(Progress).where(Progress.user_id == user_id))
     if not p:
+        next_send_at = next_send_at.replace(second=0, microsecond=0)
         p = Progress(user_id=user_id, next_position=1, next_send_at=next_send_at)
         db.add(p)
     else:
         p.next_position = 1
-        p.next_send_at = next_send_at
+        p.next_send_at = next_send_at.replace(second=0, microsecond=0)
         p.pending_post_id = None
         p.active_post_id = None
         p.active_started_at = None

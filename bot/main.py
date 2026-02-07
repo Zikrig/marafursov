@@ -23,7 +23,11 @@ async def main() -> None:
 
     if settings.seed_on_start:
         try:
-            created = seed_posts_from_json(session_factory=session_factory, json_path=settings.seed_json_path)
+            created = seed_posts_from_json(
+                session_factory=session_factory,
+                json_path=settings.seed_json_path,
+                wipe=settings.seed_wipe_on_start,
+            )
             logging.getLogger(__name__).info("Seeded %s posts from %s", created, settings.seed_json_path)
         except Exception:
             logging.getLogger(__name__).exception("Failed to seed posts from %s", settings.seed_json_path)

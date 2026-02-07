@@ -3,13 +3,13 @@ import json
 import os
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from bot.db import Post
 
 
-def seed_posts_from_json(*, session_factory, json_path: str) -> int:
+def seed_posts_from_json(*, session_factory, json_path: str, wipe: bool = False) -> int:
     """
     Upsert posts in DB from JSON file (do NOT wipe DB on start).
 
@@ -30,16 +30,20 @@ def seed_posts_from_json(*, session_factory, json_path: str) -> int:
     db: Session = session_factory()
     created = 0
     try:
+        if wipe:
+            db.execute(delete(Post))
+            db.commit()
+
         # idempotent upsert: do NOT wipe DB (admin-created posts must survive restarts)
-        for item in posts:
-            day = int(item.get("day") or 0)
+        # NOTE: day numbers are procedural and based on ordering, not JSON "day" field.
+        for idx, item in enumerate(posts, start=1):
             title = (item.get("title") or "").strip()
             text_html = item.get("text_html") or ""
             media_type = (item.get("media_type") or "").strip() or None
             file_id = (item.get("file_id") or "").strip() or None
-            if not day or not title:
+            if not title:
                 continue
-            existing = db.scalar(select(Post).where(Post.position == day))
+            existing = db.scalar(select(Post).where(Post.position == idx))
             if existing:
                 existing.title = title
                 existing.text_html = text_html
@@ -48,7 +52,7 @@ def seed_posts_from_json(*, session_factory, json_path: str) -> int:
                 existing.updated_at = dt.datetime.now()
             else:
                 p = Post(
-                    position=day,
+                    position=idx,
                     title=title,
                     text_html=text_html,
                     media_type=media_type,
@@ -57,6 +61,12 @@ def seed_posts_from_json(*, session_factory, json_path: str) -> int:
                 db.add(p)
                 created += 1
         db.commit()
+
+        if wipe:
+            # If JSON is shorter than previous DB state, ensure tail is removed.
+            # (In wipe mode it should already be empty, but keep this safe.)
+            db.execute(delete(Post).where(Post.position > len(posts)))
+            db.commit()
 
     finally:
         db.close()

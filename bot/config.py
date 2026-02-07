@@ -26,6 +26,7 @@ class Settings:
     database_url: str
     seed_json_path: str
     seed_on_start: bool
+    seed_wipe_on_start: bool
     max_responses_per_task: int
 
 
@@ -40,6 +41,7 @@ def load_settings() -> Settings:
 
     seed_json_path = os.getenv("SEED_JSON_PATH", "data/challenge_posts.json").strip() or "data/challenge_posts.json"
     seed_on_start = os.getenv("SEED_ON_START", "1").strip().lower() not in ("0", "false", "no")
+    seed_wipe_on_start = os.getenv("SEED_WIPE_ON_START", "0").strip().lower() in ("1", "true", "yes")
     max_responses_per_task = int(os.getenv("MAX_RESPONSES_PER_TASK", "3").strip() or "3")
 
     return Settings(
@@ -49,6 +51,7 @@ def load_settings() -> Settings:
         database_url=database_url,
         seed_json_path=seed_json_path,
         seed_on_start=seed_on_start,
+        seed_wipe_on_start=seed_wipe_on_start,
         max_responses_per_task=max_responses_per_task,
     )
 

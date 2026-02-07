@@ -536,7 +536,7 @@ async def admin_reset_me(call: CallbackQuery, settings: Settings, session_factor
     if not _is_admin(call.from_user.id, settings):
         await call.answer("Нет доступа", show_alert=True)
         return
-    now = _tznow(settings)
+    now = _tznow(settings).replace(second=0, microsecond=0)
     db = session_factory()
     try:
         u = db.scalar(select(User).where(User.telegram_id == call.from_user.id))
@@ -544,7 +544,7 @@ async def admin_reset_me(call: CallbackQuery, settings: Settings, session_factor
             await call.answer("Пользователь не найден", show_alert=True)
             return
         delete_task_runs_for_user(db, user_id=u.id)
-        reset_progress(db, user_id=u.id, next_send_at=now + dt.timedelta(seconds=10))
+        reset_progress(db, user_id=u.id, next_send_at=now)
     finally:
         db.close()
     await call.answer("Сброшено ✅", show_alert=True)
@@ -557,13 +557,13 @@ async def admin_reset_all(call: CallbackQuery, settings: Settings, session_facto
     if not _is_admin(call.from_user.id, settings):
         await call.answer("Нет доступа", show_alert=True)
         return
-    now = _tznow(settings)
+    now = _tznow(settings).replace(second=0, microsecond=0)
     db = session_factory()
     try:
         users = list(db.scalars(select(User)))
         for u in users:
             delete_task_runs_for_user(db, user_id=u.id)
-            reset_progress(db, user_id=u.id, next_send_at=now + dt.timedelta(seconds=10))
+            reset_progress(db, user_id=u.id, next_send_at=now)
     finally:
         db.close()
     await call.answer("Сброшено для всех ✅", show_alert=True)

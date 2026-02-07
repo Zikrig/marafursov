@@ -46,6 +46,10 @@ def _tznow(settings: Settings) -> dt.datetime:
     return dt.datetime.now(ZoneInfo(settings.tz)).replace(tzinfo=None)
 
 
+def _floor_to_minute(t: dt.datetime) -> dt.datetime:
+    return t.replace(second=0, microsecond=0)
+
+
 def _extract_text_or_caption(message: Message) -> str:
     return (message.text or message.caption or "").strip()
 
@@ -102,6 +106,7 @@ async def _send_first_task_after_delay(*, bot, session_factory, settings: Settin
     """
     await asyncio.sleep(delay_sec)
     now = _tznow(settings)
+    now_min = _floor_to_minute(now)
 
     db = session_factory()
     try:
@@ -109,7 +114,7 @@ async def _send_first_task_after_delay(*, bot, session_factory, settings: Settin
         if not user:
             return
 
-        prog = get_or_create_progress(db, user_id=user.id, next_send_at=now)
+        prog = get_or_create_progress(db, user_id=user.id, next_send_at=now_min)
 
         # don't spam if something is already pending/active
         if prog.pending_post_id or prog.active_post_id:
@@ -118,7 +123,7 @@ async def _send_first_task_after_delay(*, bot, session_factory, settings: Settin
         # only if day 1 is still next and time is due
         if prog.next_position != 1:
             return
-        if prog.next_send_at and prog.next_send_at > now:
+        if prog.next_send_at and prog.next_send_at > now_min:
             return
 
         post = get_post_by_position(db, position=1)
@@ -134,7 +139,7 @@ async def _send_first_task_after_delay(*, bot, session_factory, settings: Settin
 
         prog.pending_post_id = post.id
         prog.next_position = 2
-        prog.next_send_at = now + dt.timedelta(minutes=int(app.send_interval_minutes))
+        prog.next_send_at = now_min + dt.timedelta(minutes=int(app.send_interval_minutes))
         prog.updated_at = dt.datetime.now()
         db.commit()
     finally:
@@ -147,6 +152,7 @@ async def cmd_start(message: Message, settings: Settings, session_factory):
         return
 
     now = _tznow(settings)
+    now_min = _floor_to_minute(now)
 
     db = session_factory()
     try:
@@ -159,7 +165,8 @@ async def cmd_start(message: Message, settings: Settings, session_factory):
         await _safe_send_html(message, greet, disable_web_page_preview=True)
 
         # ensure progress
-        get_or_create_progress(db, user_id=user.id, next_send_at=now + dt.timedelta(seconds=5))
+        # minute precision; scheduler checks every 30 seconds
+        get_or_create_progress(db, user_id=user.id, next_send_at=now_min)
 
         # first task in ~10 seconds (no extra message)
         asyncio.create_task(
@@ -235,29 +242,17 @@ async def start_task_callback(call: CallbackQuery, settings: Settings, session_f
 
         prog = get_or_create_progress(db, user_id=user.id, next_send_at=now)
 
-        # Allow starting:
-        # - current pending teaser
-        # - any previously issued teaser (position < next_position), even if a newer teaser is pending
-        #
-        # This prevents "button suddenly invalid" when scheduler issued a newer task before user clicked.
-        if prog.pending_post_id != post.id and post.position >= prog.next_position:
-            # still not issued to the user (or invalid callback)
-            await call.answer("Не получилось открыть задание.", show_alert=True)
-            return
-
-        # "active task" is just a UI guard; do not block starting another one.
-        # Old runs stay open by their own `until` timer and can still be answered via reply-to.
-        if prog.active_post_id is not None:
-            prog.active_post_id = None
-            prog.active_started_at = None
-            prog.active_until = None
-            prog.updated_at = dt.datetime.now()
-            db.commit()
+        # If a run for this post is already open, do not "restart the timer".
+        existing_open = get_latest_open_run_for_post(db, user_id=user.id, post_id=post.id, now=now)
 
         app = get_app_settings(db)
-        until = now + dt.timedelta(minutes=int(app.response_window_minutes))
+        if existing_open:
+            until = existing_open.until
+        else:
+            until = now + dt.timedelta(minutes=int(app.response_window_minutes))
+            create_task_run(db, user_id=user.id, post_id=post.id, started_at=now, until=until)
+
         window_text = f"{int(app.response_window_minutes)} минут"
-        create_task_run(db, user_id=user.id, post_id=post.id, started_at=now, until=until)
         # Keep Progress in sync (for status UI + "one active task" guard)
         if prog.pending_post_id == post.id:
             prog.pending_post_id = None

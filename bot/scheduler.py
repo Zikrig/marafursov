@@ -25,6 +25,9 @@ def _tznow(settings: Settings) -> dt.datetime:
     # to avoid naive/aware comparison issues with SQLite.
     return dt.datetime.now(ZoneInfo(settings.tz)).replace(tzinfo=None)
 
+def _floor_to_minute(t: dt.datetime) -> dt.datetime:
+    return t.replace(second=0, microsecond=0)
+
 
 async def _send_task_notification(bot: Bot, *, chat_id: int, post: Post) -> None:
     safe_title = html.escape(post.title or "")
@@ -67,6 +70,7 @@ async def tick(*, bot: Bot, session_factory, settings: Settings) -> None:
     """
     async with _TICK_LOCK:
         now = _tznow(settings)
+        now_min = _floor_to_minute(now)
 
         db: Session = session_factory()
         try:
@@ -114,7 +118,15 @@ async def tick(*, bot: Bot, session_factory, settings: Settings) -> None:
                                 pass
 
                 # due notification (send even if previous wasn't started)
-                if p.next_position <= max_posts and p.next_send_at <= now:
+                # next_send_at is treated with minute-level precision
+                if p.next_send_at:
+                    floored = _floor_to_minute(p.next_send_at)
+                    if floored != p.next_send_at:
+                        p.next_send_at = floored
+                        p.updated_at = dt.datetime.now()
+                        db.commit()
+
+                if p.next_position <= max_posts and p.next_send_at <= now_min:
                     post = get_post_by_position(db, position=p.next_position)
                     if not post:
                         logger.info(
@@ -125,7 +137,7 @@ async def tick(*, bot: Bot, session_factory, settings: Settings) -> None:
                         )
                         # Do NOT advance next_position; otherwise we "jump" over days.
                         # Just retry later (usually indicates bad JSON seeding / gaps).
-                        p.next_send_at = now + dt.timedelta(minutes=interval_min)
+                        p.next_send_at = now_min + dt.timedelta(minutes=interval_min)
                         p.updated_at = dt.datetime.now()
                         db.commit()
                         continue
@@ -155,7 +167,7 @@ async def tick(*, bot: Bot, session_factory, settings: Settings) -> None:
                         await _send_task_notification(bot, chat_id=int(chat_id), post=post)
                         p.pending_post_id = post.id
                         p.next_position += 1
-                        p.next_send_at = now + dt.timedelta(minutes=interval_min)
+                        p.next_send_at = now_min + dt.timedelta(minutes=interval_min)
                         p.updated_at = dt.datetime.now()
                         db.commit()
                     except Exception:
@@ -187,7 +199,7 @@ def setup_scheduler(*, bot: Bot, session_factory, settings: Settings) -> AsyncIO
 
     scheduler.add_job(
         _tick,
-        trigger=IntervalTrigger(seconds=5),
+        trigger=IntervalTrigger(seconds=30),
         id="tick",
         replace_existing=True,
         max_instances=1,
