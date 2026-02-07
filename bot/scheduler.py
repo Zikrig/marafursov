@@ -53,24 +53,55 @@ async def _send_task_notification(bot: Bot, *, chat_id: int, post: Post) -> None
         raise
 
 
-async def _send_summary_prompt(bot: Bot, *, chat_id: int) -> None:
-    final_text = (
-        "День 30.\n"
-        "Поздравляем! Вы только что совершили переход из «родителя с идеей» в «родителя-заявителя». "
-        "Это интересная роль, у вас появились новые умения и навыки, а главное, отличная разработанная идея! "
-        "Какой бы ни был результат, вы уже создали самое главное - план, команду и веру в возможность изменений. "
-        "Теперь вы не просто критики, вы - проектировщики. "
-        "Первые шаги к реализации можно начинать уже сейчас. "
-        "Осталось найти подходящий грантовый конкурс и заполнить заявку по структуре грантодателя. "
-        "Гордимся вами! Так держать!"
-    )
-    await bot.send_message(
-        chat_id=chat_id,
-        text=final_text,
-        reply_markup=summary_kb(),
-        parse_mode=None,
-        disable_web_page_preview=True,
-    )
+async def _send_summary_prompt(
+    bot: Bot,
+    *,
+    chat_id: int,
+    text_value: str,
+    media_type: str | None,
+    file_id: str | None,
+) -> None:
+    if media_type == "photo" and file_id:
+        try:
+            await bot.send_photo(
+                chat_id=chat_id,
+                photo=file_id,
+                caption=text_value,
+                reply_markup=summary_kb(),
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        except TelegramBadRequest as e:
+            if "can't parse entities" in str(e).lower():
+                await bot.send_photo(
+                    chat_id=chat_id,
+                    photo=file_id,
+                    caption=text_value,
+                    reply_markup=summary_kb(),
+                    parse_mode=None,
+                )
+                return
+            raise
+
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=text_value,
+            reply_markup=summary_kb(),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+    except TelegramBadRequest as e:
+        if "can't parse entities" in str(e).lower():
+            await bot.send_message(
+                chat_id=chat_id,
+                text=text_value,
+                reply_markup=summary_kb(),
+                parse_mode=None,
+                disable_web_page_preview=True,
+            )
+            return
+        raise
 
 
 async def tick(*, bot: Bot, session_factory, settings: Settings) -> None:
@@ -132,7 +163,13 @@ async def tick(*, bot: Bot, session_factory, settings: Settings) -> None:
                     if last_run and now >= last_run.until:
                         if telegram_id:
                             try:
-                                await _send_summary_prompt(bot, chat_id=int(telegram_id))
+                                await _send_summary_prompt(
+                                    bot,
+                                    chat_id=int(telegram_id),
+                                    text_value=str(app.final_text),
+                                    media_type=getattr(app, "final_media_type", None),
+                                    file_id=getattr(app, "final_file_id", None),
+                                )
                                 p.summary_prompt_sent = True
                                 p.updated_at = dt.datetime.now()
                                 db.commit()

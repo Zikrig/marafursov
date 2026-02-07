@@ -119,6 +119,26 @@ class AppSettings(Base):
         default="Добро пожаловать в марафон!\n\nСкоро пришлю первое задание.",
         nullable=False,
     )
+    greeting_media_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    greeting_file_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    final_text: Mapped[str] = mapped_column(
+        Text,
+        default=(
+            "День 30.\n"
+            "Поздравляем! Вы только что совершили переход из «родителя с идеей» в «родителя-заявителя». "
+            "Это интересная роль, у вас появились новые умения и навыки, а главное, отличная разработанная идея! "
+            "Какой бы ни был результат, вы уже создали самое главное - план, команду и веру в возможность изменений. "
+            "Теперь вы не просто критики, вы - проектировщики. "
+            "Первые шаги к реализации можно начинать уже сейчас. "
+            "Осталось найти подходящий грантовый конкурс и заполнить заявку по структуре грантодателя. "
+            "Гордимся вами! Так держать!"
+        ),
+        nullable=False,
+    )
+    final_media_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    final_file_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     response_window_minutes: Mapped[int] = mapped_column(Integer, default=12 * 60, nullable=False)
     send_interval_minutes: Mapped[int] = mapped_column(Integer, default=1440, nullable=False)
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime(), default=lambda: dt.datetime.now(), nullable=False)
@@ -175,7 +195,18 @@ def init_db(engine) -> None:
                 }
                 expected_task_runs = {"id", "user_id", "post_id", "started_at", "until", "updated_at"}
                 expected_responses = {"id", "run_id", "user_id", "post_id", "seq", "text", "created_at"}
-                expected_app_settings = {"id", "greeting_text", "response_window_minutes", "send_interval_minutes", "updated_at"}
+                expected_app_settings = {
+                    "id",
+                    "greeting_text",
+                    "greeting_media_type",
+                    "greeting_file_id",
+                    "final_text",
+                    "final_media_type",
+                    "final_file_id",
+                    "response_window_minutes",
+                    "send_interval_minutes",
+                    "updated_at",
+                }
 
                 users_cols = table_columns("users")
                 posts_cols = table_columns("posts")
@@ -211,6 +242,25 @@ def init_db(engine) -> None:
                 if users_cols and users_cols != expected_users:
                     conn.exec_driver_sql("DROP TABLE IF EXISTS users")
 
+                # Best-effort non-destructive migration for `app_settings` (ADD COLUMN only).
+                if app_settings_cols and app_settings_cols != expected_app_settings:
+                    missing = expected_app_settings - app_settings_cols
+                    extra = app_settings_cols - expected_app_settings
+                    if missing and not extra:
+                        for col in sorted(missing):
+                            if col in (
+                                "greeting_text",
+                                "greeting_file_id",
+                                "final_text",
+                                "final_file_id",
+                            ):
+                                conn.exec_driver_sql(f"ALTER TABLE app_settings ADD COLUMN {col} TEXT")
+                            elif col in ("greeting_media_type", "final_media_type"):
+                                conn.exec_driver_sql(f"ALTER TABLE app_settings ADD COLUMN {col} VARCHAR(20)")
+                            # ints/dates should already exist; keep safe
+                        conn.commit()
+                        app_settings_cols = table_columns("app_settings")
+
                 if app_settings_cols and app_settings_cols != expected_app_settings:
                     conn.exec_driver_sql("DROP TABLE IF EXISTS app_settings")
 
@@ -235,6 +285,32 @@ def get_app_settings(db: Session) -> AppSettings:
 def set_greeting_text(db: Session, *, text: str) -> AppSettings:
     s = get_app_settings(db)
     s.greeting_text = text
+    s.updated_at = dt.datetime.now()
+    db.commit()
+    return s
+
+
+def set_greeting_media(db: Session, *, media_type: Optional[str], file_id: Optional[str]) -> AppSettings:
+    s = get_app_settings(db)
+    s.greeting_media_type = media_type
+    s.greeting_file_id = file_id
+    s.updated_at = dt.datetime.now()
+    db.commit()
+    return s
+
+
+def set_final_text(db: Session, *, text: str) -> AppSettings:
+    s = get_app_settings(db)
+    s.final_text = text
+    s.updated_at = dt.datetime.now()
+    db.commit()
+    return s
+
+
+def set_final_media(db: Session, *, media_type: Optional[str], file_id: Optional[str]) -> AppSettings:
+    s = get_app_settings(db)
+    s.final_media_type = media_type
+    s.final_file_id = file_id
     s.updated_at = dt.datetime.now()
     db.commit()
     return s

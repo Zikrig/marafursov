@@ -106,6 +106,16 @@ async def _safe_send_html(message: Message, text: str, **kwargs) -> None:
             return
         raise
 
+
+async def _safe_send_photo_with_caption(message: Message, *, file_id: str, caption: str, **kwargs) -> None:
+    try:
+        await message.answer_photo(photo=file_id, caption=caption, parse_mode=ParseMode.HTML, **kwargs)
+    except TelegramBadRequest as e:
+        if "can't parse entities" in str(e).lower():
+            await message.answer_photo(photo=file_id, caption=caption, parse_mode=None, **kwargs)
+            return
+        raise
+
 def _summary_text_for_post(*, post, responses) -> str:
     """
     Plain-text summary (no HTML) to avoid parse errors on arbitrary user content
@@ -219,7 +229,15 @@ async def cmd_start(message: Message, settings: Settings, session_factory, state
         # Normal flow for already onboarded users
         app = get_app_settings(db)
         greet = app.greeting_text
-        await _safe_send_html(message, greet, disable_web_page_preview=True)
+        if getattr(app, "greeting_media_type", None) == "photo" and getattr(app, "greeting_file_id", None):
+            await _safe_send_photo_with_caption(
+                message,
+                file_id=str(app.greeting_file_id),
+                caption=greet,
+                disable_web_page_preview=True,
+            )
+        else:
+            await _safe_send_html(message, greet, disable_web_page_preview=True)
 
         # ensure progress (minute precision; scheduler checks every 30 seconds)
         get_or_create_progress(db, user_id=user.id, next_send_at=now_min)

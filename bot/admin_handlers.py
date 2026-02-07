@@ -37,6 +37,9 @@ from bot.db import (
     reset_progress,
     set_user_admin_flag,
     set_greeting_text,
+    set_greeting_media,
+    set_final_text,
+    set_final_media,
     set_response_window_minutes,
     set_send_interval_minutes,
     upsert_user,
@@ -103,8 +106,11 @@ class AdminEditFSM(StatesGroup):
     create_text = State()
     create_media = State()
     greeting = State()
+    greeting_media = State()
     response_window = State()
     send_interval = State()
+    final_text = State()
+    final_media = State()
 
 
 class AdminBroadcastFSM(StatesGroup):
@@ -226,6 +232,72 @@ async def admin_greeting(call: CallbackQuery, settings: Settings, state: FSMCont
         "<b>Приветствие</b>\n\nТекущее:\n"
         f"{_h(current)}\n\n"
         "Пришлите новый текст приветствия:",
+        disable_web_page_preview=True,
+    )
+    await call.answer()
+
+
+@admin_router.callback_query(F.data == "admin:greeting_media")
+async def admin_greeting_media(call: CallbackQuery, settings: Settings, state: FSMContext, session_factory):
+    if not _is_admin(call.from_user.id if call.from_user else None, settings):
+        await call.answer("Нет доступа", show_alert=True)
+        return
+    db = session_factory()
+    try:
+        s = get_app_settings(db)
+        current = s.greeting_media_type or "нет"
+    finally:
+        db.close()
+    await state.clear()
+    await state.set_state(AdminEditFSM.greeting_media)
+    await call.message.answer(
+        "<b>Приветствие: картинка</b>\n\n"
+        f"Текущее медиа: <b>{_h(current)}</b>\n\n"
+        "Пришлите <b>картинку</b> (photo) или текст <code>remove</code>, чтобы убрать:",
+        disable_web_page_preview=True,
+    )
+    await call.answer()
+
+
+@admin_router.callback_query(F.data == "admin:final")
+async def admin_final_text(call: CallbackQuery, settings: Settings, state: FSMContext, session_factory):
+    if not _is_admin(call.from_user.id if call.from_user else None, settings):
+        await call.answer("Нет доступа", show_alert=True)
+        return
+    db = session_factory()
+    try:
+        s = get_app_settings(db)
+        current = s.final_text
+    finally:
+        db.close()
+    await state.clear()
+    await state.set_state(AdminEditFSM.final_text)
+    await call.message.answer(
+        "<b>Финальное сообщение</b>\n\nТекущее:\n"
+        f"{_h(current)}\n\n"
+        "Пришлите новый текст финального сообщения:",
+        disable_web_page_preview=True,
+    )
+    await call.answer()
+
+
+@admin_router.callback_query(F.data == "admin:final_media")
+async def admin_final_media(call: CallbackQuery, settings: Settings, state: FSMContext, session_factory):
+    if not _is_admin(call.from_user.id if call.from_user else None, settings):
+        await call.answer("Нет доступа", show_alert=True)
+        return
+    db = session_factory()
+    try:
+        s = get_app_settings(db)
+        current = s.final_media_type or "нет"
+    finally:
+        db.close()
+    await state.clear()
+    await state.set_state(AdminEditFSM.final_media)
+    await call.message.answer(
+        "<b>Финал: картинка</b>\n\n"
+        f"Текущее медиа: <b>{_h(current)}</b>\n\n"
+        "Пришлите <b>картинку</b> (photo) или текст <code>remove</code>, чтобы убрать:",
         disable_web_page_preview=True,
     )
     await call.answer()
@@ -642,6 +714,73 @@ async def admin_save_greeting(message: Message, settings: Settings, state: FSMCo
         db.close()
     await state.clear()
     await message.answer("✅ Приветствие обновлено.", reply_markup=admins_menu_kb())
+
+
+@admin_router.message(AdminEditFSM.greeting_media)
+async def admin_save_greeting_media(message: Message, settings: Settings, state: FSMContext, session_factory):
+    if not _is_admin(message.from_user.id if message.from_user else None, settings):
+        return
+    raw = (message.text or "").strip().lower()
+    media_type = None
+    file_id = None
+    if raw == "remove":
+        media_type = None
+        file_id = None
+    elif message.photo:
+        media_type = "photo"
+        file_id = message.photo[-1].file_id
+    else:
+        await message.answer("Нужна картинка (photo) или <code>remove</code>.")
+        return
+    db = session_factory()
+    try:
+        set_greeting_media(db, media_type=media_type, file_id=file_id)
+    finally:
+        db.close()
+    await state.clear()
+    await message.answer("✅ Картинка для приветствия обновлена.", reply_markup=admins_menu_kb())
+
+
+@admin_router.message(AdminEditFSM.final_text)
+async def admin_save_final_text(message: Message, settings: Settings, state: FSMContext, session_factory):
+    if not _is_admin(message.from_user.id if message.from_user else None, settings):
+        return
+    txt = message.html_text or message.text or ""
+    if not txt.strip():
+        await message.answer("Текст пустой. Пришлите ещё раз:")
+        return
+    db = session_factory()
+    try:
+        set_final_text(db, text=txt)
+    finally:
+        db.close()
+    await state.clear()
+    await message.answer("✅ Финальное сообщение обновлено.", reply_markup=admins_menu_kb())
+
+
+@admin_router.message(AdminEditFSM.final_media)
+async def admin_save_final_media(message: Message, settings: Settings, state: FSMContext, session_factory):
+    if not _is_admin(message.from_user.id if message.from_user else None, settings):
+        return
+    raw = (message.text or "").strip().lower()
+    media_type = None
+    file_id = None
+    if raw == "remove":
+        media_type = None
+        file_id = None
+    elif message.photo:
+        media_type = "photo"
+        file_id = message.photo[-1].file_id
+    else:
+        await message.answer("Нужна картинка (photo) или <code>remove</code>.")
+        return
+    db = session_factory()
+    try:
+        set_final_media(db, media_type=media_type, file_id=file_id)
+    finally:
+        db.close()
+    await state.clear()
+    await message.answer("✅ Картинка для финала обновлена.", reply_markup=admins_menu_kb())
 
 
 @admin_router.callback_query(F.data.startswith("admin:list:"))
