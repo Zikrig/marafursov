@@ -17,6 +17,7 @@ from bot.config import Settings
 from bot.db import (
     Progress,
     add_response,
+    count_posts,
     delete_user_by_telegram_id,
     get_or_create_progress,
     get_post,
@@ -139,11 +140,34 @@ async def _send_summary_item(message_like, *, post, responses, truncate_to: int 
     )
 
 
-async def _send_first_task_after_delay(*, bot, session_factory, settings: Settings, telegram_id: int, delay_sec: float) -> None:
+async def _safe_send_task_notification(bot, *, chat_id: int, post) -> None:
     """
-    Send day 1 ~delay_sec after /start (without relying on scheduler tick interval).
+    Reusable "task received" message with HTML fallback (user content may break HTML).
     """
-    await asyncio.sleep(delay_sec)
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=f"Вы получили сегодняшнее задание — <b>{_h(post.title or '')}</b>\n\nНачать?",
+            reply_markup=start_task_kb(post_id=post.id),
+            parse_mode=ParseMode.HTML,
+        )
+    except TelegramBadRequest as e:
+        if "can't parse entities" in str(e).lower():
+            await bot.send_message(
+                chat_id=chat_id,
+                text=f"Вы получили сегодняшнее задание — {post.title}\n\nНачать?",
+                reply_markup=start_task_kb(post_id=post.id),
+                parse_mode=None,
+            )
+            return
+        raise
+
+
+async def _send_due_task_now(*, bot, session_factory, settings: Settings, telegram_id: int) -> str:
+    """
+    Send the next due task (same semantics as scheduler: one at a time, honor next_send_at).
+    Returns a short status string for user feedback.
+    """
     now = _tznow(settings)
     now_min = _floor_to_minute(now)
 
@@ -151,39 +175,43 @@ async def _send_first_task_after_delay(*, bot, session_factory, settings: Settin
     try:
         user = get_user_by_telegram_id(db, telegram_id)
         if not user:
-            return
-        # Do not send tasks until onboarding is complete
+            return "no_user"
         if not getattr(user, "onboarded_at", None):
-            return
+            return "not_onboarded"
 
         prog = get_or_create_progress(db, user_id=user.id, next_send_at=now_min)
 
-        # don't spam if something is already pending/active
-        if prog.pending_post_id or prog.active_post_id:
-            return
+        # If we are at the very beginning, allow immediate first task after "ПОЕХАЛИ!"
+        if prog.next_position == 1 and prog.next_send_at and prog.next_send_at > now_min:
+            prog.next_send_at = now_min
+            prog.updated_at = dt.datetime.now()
+            db.commit()
 
-        # only if day 1 is still next and time is due
-        if prog.next_position != 1:
-            return
+        if prog.pending_post_id:
+            post = get_post(db, int(prog.pending_post_id))
+            if post:
+                await _safe_send_task_notification(bot, chat_id=telegram_id, post=post)
+            return "already_pending"
+        if prog.active_post_id:
+            return "already_active"
+
         if prog.next_send_at and prog.next_send_at > now_min:
-            return
+            return "too_early"
 
-        post = get_post_by_position(db, position=1)
+        max_posts = count_posts(db)
+        if prog.next_position > max_posts:
+            return "done"
+
+        post = get_post_by_position(db, position=int(prog.next_position))
         if not post:
-            return
-        app = get_app_settings(db)
+            return "missing_post"
 
-        await bot.send_message(
-            chat_id=telegram_id,
-            text=f"Вы получили сегодняшнее задание — <b>{_h(post.title)}</b>\n\nНачать?",
-            reply_markup=start_task_kb(post_id=post.id),
-        )
-
+        await _safe_send_task_notification(bot, chat_id=telegram_id, post=post)
         prog.pending_post_id = post.id
-        prog.next_position = 2
-        # next_send_at will be computed from task close time (done/limit/timeout)
+        prog.next_position += 1
         prog.updated_at = dt.datetime.now()
         db.commit()
+        return "sent"
     finally:
         db.close()
 
@@ -340,15 +368,30 @@ async def onboarding_go_callback(call: CallbackQuery, settings: Settings, sessio
     finally:
         db.close()
 
-    asyncio.create_task(
-        _send_first_task_after_delay(
-            bot=call.bot,
-            session_factory=session_factory,
-            settings=settings,
-            telegram_id=call.from_user.id,
-            delay_sec=0.0,
-        )
+    status = await _send_due_task_now(
+        bot=call.bot,
+        session_factory=session_factory,
+        settings=settings,
+        telegram_id=call.from_user.id,
     )
+    if status == "sent":
+        return
+    if status == "already_pending":
+        return
+    if status == "already_active":
+        await call.bot.send_message(call.from_user.id, "У вас уже есть активное задание. Просто отправляйте ответы в чат.")
+        return
+    if status == "too_early":
+        await call.bot.send_message(call.from_user.id, "Следующее задание будет доступно позже по таймеру.")
+        return
+    if status == "missing_post":
+        await call.bot.send_message(call.from_user.id, "Не нашёл задание в базе. Сообщите администратору.")
+        return
+    if status == "done":
+        await call.bot.send_message(call.from_user.id, "Похоже, задания закончились. Нажмите «Посмотреть мои ответы» в финале.")
+        return
+    # no_user / not_onboarded / unexpected
+    await call.bot.send_message(call.from_user.id, "Не удалось выдать задание. Попробуйте ещё раз через минуту.")
 
 @router.message(Command("null"))
 async def cmd_null(message: Message, settings: Settings, session_factory):
