@@ -32,7 +32,7 @@ from bot.db import (
     set_user_admin_flag,
     upsert_user,
 )
-from bot.keyboards import start_task_kb, summary_full_kb, task_done_kb
+from bot.keyboards import onboarding_go_kb, start_task_kb, summary_full_kb, task_done_kb
 
 router = Router()
 
@@ -259,7 +259,7 @@ async def onboarding_region(message: Message, settings: Settings, session_factor
     finally:
         db.close()
     await state.set_state(OnboardingFSM.email)
-    await message.answer("кажите Вашу электронную почту", parse_mode=None)
+    await message.answer("Укажите Вашу электронную почту", parse_mode=None)
 
 
 def _looks_like_email(s: str) -> bool:
@@ -311,9 +311,10 @@ async def onboarding_email(message: Message, settings: Settings, session_factory
                 file_id=str(app.greeting_file_id),
                 caption=rules_text,
                 disable_web_page_preview=True,
+                reply_markup=onboarding_go_kb(),
             )
         else:
-            await _safe_send_html(message, rules_text, disable_web_page_preview=True)
+            await _safe_send_html(message, rules_text, disable_web_page_preview=True, reply_markup=onboarding_go_kb())
     finally:
         db.close()
 
@@ -327,6 +328,28 @@ async def onboarding_email(message: Message, settings: Settings, session_factory
             settings=settings,
             telegram_id=message.from_user.id,
             delay_sec=2.0,
+        )
+    )
+
+
+@router.callback_query(F.data == "onboarding:go")
+async def onboarding_go_callback(call: CallbackQuery, settings: Settings, session_factory):
+    if not call.from_user:
+        return
+    await call.answer("Поехали!")
+    # Make the button disappear; ignore if message can't be edited (e.g. old).
+    if call.message:
+        try:
+            await call.message.edit_reply_markup(reply_markup=None)
+        except TelegramBadRequest:
+            pass
+    asyncio.create_task(
+        _send_first_task_after_delay(
+            bot=call.bot,
+            session_factory=session_factory,
+            settings=settings,
+            telegram_id=call.from_user.id,
+            delay_sec=0.0,
         )
     )
 

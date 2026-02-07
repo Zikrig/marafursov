@@ -26,6 +26,12 @@ def summary_full_kb(*, post_id: int) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def onboarding_go_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="ПОЕХАЛИ!", callback_data="onboarding:go"))
+    return kb.as_markup()
+
+
 def admins_menu_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="📋 Посты", callback_data="admin:list:0"))
