@@ -283,20 +283,13 @@ async def onboarding_email(message: Message, settings: Settings, session_factory
         await message.answer("Пожалуйста, укажите корректный email (например: name@example.com).")
         return
 
-    now = _tznow(settings)
-    now_min = _floor_to_minute(now)
-
     db = session_factory()
     try:
         user = get_user_by_telegram_id(db, message.from_user.id)
         if not user:
             user = upsert_user(db, telegram_id=message.from_user.id)
         user.email = email.strip()
-        user.onboarded_at = now_min
         db.commit()
-
-        # ensure progress right after onboarding
-        get_or_create_progress(db, user_id=user.id, next_send_at=now_min)
     finally:
         db.close()
 
@@ -320,17 +313,6 @@ async def onboarding_email(message: Message, settings: Settings, session_factory
 
     await state.clear()
 
-    # send the first task soon after onboarding
-    asyncio.create_task(
-        _send_first_task_after_delay(
-            bot=message.bot,
-            session_factory=session_factory,
-            settings=settings,
-            telegram_id=message.from_user.id,
-            delay_sec=2.0,
-        )
-    )
-
 
 @router.callback_query(F.data == "onboarding:go")
 async def onboarding_go_callback(call: CallbackQuery, settings: Settings, session_factory):
@@ -343,6 +325,21 @@ async def onboarding_go_callback(call: CallbackQuery, settings: Settings, sessio
             await call.message.edit_reply_markup(reply_markup=None)
         except TelegramBadRequest:
             pass
+
+    # Mark onboarding completed ONLY after "ПОЕХАЛИ!"
+    now = _tznow(settings)
+    now_min = _floor_to_minute(now)
+    db = session_factory()
+    try:
+        user = get_user_by_telegram_id(db, call.from_user.id)
+        if not user:
+            user = upsert_user(db, telegram_id=call.from_user.id)
+        if not getattr(user, "onboarded_at", None):
+            user.onboarded_at = now_min
+            db.commit()
+    finally:
+        db.close()
+
     asyncio.create_task(
         _send_first_task_after_delay(
             bot=call.bot,
