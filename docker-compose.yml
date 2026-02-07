@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  bot:
+    build: .
+    env_file:
+      - .env
+    volumes:
+      - bot_data:/app/bot_data
+
+volumes:
+  bot_data:
