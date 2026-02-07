@@ -28,10 +28,20 @@ def admins_menu_kb() -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="⏲ Интервал рассылки", callback_data="admin:send_interval"))
     kb.row(InlineKeyboardButton(text="📄 Моя сводка", callback_data="admin:summary:me"))
     kb.row(InlineKeyboardButton(text="📊 Сводки всех (Excel)", callback_data="admin:export:xlsx"))
+    kb.row(InlineKeyboardButton(text="📣 Рассылка всем", callback_data="admin:broadcast:start"))
     kb.row(InlineKeyboardButton(text="➕ Создать пост", callback_data="admin:create"))
     kb.row(
         InlineKeyboardButton(text="🔄 Сбросить (я)", callback_data="admin:reset:me"),
         InlineKeyboardButton(text="🔄 Сбросить (все)", callback_data="admin:reset:all"),
+    )
+    return kb.as_markup()
+
+
+def admin_broadcast_confirm_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(
+        InlineKeyboardButton(text="✅ Отправить всем", callback_data="admin:broadcast:send"),
+        InlineKeyboardButton(text="❌ Отмена", callback_data="admin:broadcast:cancel"),
     )
     return kb.as_markup()
 

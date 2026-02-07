@@ -1,5 +1,7 @@
 import datetime as dt
 import io
+import asyncio
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from html import escape as _h
@@ -9,6 +11,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 from aiogram.types import BufferedInputFile
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramNetworkError, TelegramRetryAfter
+from aiogram.types import InputMediaAudio, InputMediaDocument, InputMediaPhoto, InputMediaVideo
 from openpyxl import Workbook
 from sqlalchemy import func, select
 
@@ -40,6 +44,7 @@ from bot.db import (
 )
 from bot.keyboards import (
     admin_edit_post_kb,
+    admin_broadcast_confirm_kb,
     admins_menu_kb,
     admins_posts_list_kb,
 )
@@ -100,6 +105,60 @@ class AdminEditFSM(StatesGroup):
     greeting = State()
     response_window = State()
     send_interval = State()
+
+
+class AdminBroadcastFSM(StatesGroup):
+    content = State()
+
+
+_ALBUM_BUFFER: dict[tuple[int, str], list[Message]] = {}
+_ALBUM_TASKS: dict[tuple[int, str], asyncio.Task] = {}
+
+
+def _extract_album_media(m: Message) -> dict[str, Any] | None:
+    caption = (m.caption or "").strip() or None
+    if m.photo:
+        return {"type": "photo", "file_id": m.photo[-1].file_id, "caption": caption}
+    if m.video:
+        return {"type": "video", "file_id": m.video.file_id, "caption": caption}
+    if m.document:
+        return {"type": "document", "file_id": m.document.file_id, "caption": caption}
+    if m.audio:
+        return {"type": "audio", "file_id": m.audio.file_id, "caption": caption}
+    return None
+
+
+async def _finalize_album_draft(*, key: tuple[int, str], state: FSMContext, chat_id: int) -> None:
+    await asyncio.sleep(1.2)  # debounce: wait for the whole media_group
+    msgs = _ALBUM_BUFFER.pop(key, [])
+    _ALBUM_TASKS.pop(key, None)
+    if not msgs:
+        return
+
+    # preserve original order by message_id
+    msgs.sort(key=lambda x: x.message_id)
+
+    media_items: list[dict[str, Any]] = []
+    message_ids: list[int] = []
+    for m in msgs:
+        message_ids.append(m.message_id)
+        item = _extract_album_media(m)
+        if item:
+            media_items.append(item)
+
+    await state.update_data(
+        broadcast_draft={
+            "kind": "album",
+            "from_chat_id": int(chat_id),
+            "message_ids": message_ids,
+            "media": media_items,
+        }
+    )
+
+    await msgs[-1].answer(
+        "✅ Альбом получен.\n\nОтправить всем пользователям?",
+        reply_markup=admin_broadcast_confirm_kb(),
+    )
 
 async def _render_list(call: CallbackQuery, *, page: int, session_factory) -> None:
     db = session_factory()
@@ -237,6 +296,170 @@ async def admin_send_interval(call: CallbackQuery, settings: Settings, state: FS
     await call.answer()
 
 
+@admin_router.callback_query(F.data == "admin:broadcast:start")
+async def admin_broadcast_start(call: CallbackQuery, settings: Settings, state: FSMContext):
+    if not _is_admin(call.from_user.id if call.from_user else None, settings):
+        await call.answer("Нет доступа", show_alert=True)
+        return
+    await state.clear()
+    await state.set_state(AdminBroadcastFSM.content)
+    await call.message.answer(
+        "<b>Рассылка всем</b>\n\n"
+        "Пришлите сообщение для рассылки (текст/фото/ГС/док/стикер/альбом).\n"
+        "Затем подтвердите отправку.\n\n"
+        "Отмена: /cancel",
+        disable_web_page_preview=True,
+    )
+    await call.answer()
+
+
+@admin_router.callback_query(F.data == "admin:broadcast:cancel")
+async def admin_broadcast_cancel(call: CallbackQuery, settings: Settings, state: FSMContext, session_factory):
+    if not _is_admin(call.from_user.id if call.from_user else None, settings):
+        await call.answer("Нет доступа", show_alert=True)
+        return
+    await state.clear()
+    text = await _render_admin_menu_text(telegram_id=call.from_user.id, session_factory=session_factory)
+    await call.message.answer("❌ Отменено.\n\n" + text, reply_markup=admins_menu_kb())
+    await call.answer()
+
+
+@admin_router.message(AdminBroadcastFSM.content)
+async def admin_broadcast_capture(message: Message, settings: Settings, state: FSMContext):
+    if not _is_admin(message.from_user.id if message.from_user else None, settings):
+        return
+
+    # Album (media group)
+    if message.media_group_id:
+        key = (int(message.chat.id), str(message.media_group_id))
+        _ALBUM_BUFFER.setdefault(key, []).append(message)
+
+        # debounce finalize task
+        t = _ALBUM_TASKS.get(key)
+        if t and not t.done():
+            t.cancel()
+        _ALBUM_TASKS[key] = asyncio.create_task(_finalize_album_draft(key=key, state=state, chat_id=int(message.chat.id)))
+        return
+
+    # Single message draft: use copy_message later (supports voice, sticker, etc.)
+    await state.update_data(
+        broadcast_draft={
+            "kind": "single",
+            "from_chat_id": int(message.chat.id),
+            "message_id": int(message.message_id),
+        }
+    )
+    await message.answer(
+        "✅ Сообщение получено.\n\nОтправить всем пользователям?",
+        reply_markup=admin_broadcast_confirm_kb(),
+    )
+
+
+@admin_router.callback_query(F.data == "admin:broadcast:send")
+async def admin_broadcast_send(call: CallbackQuery, settings: Settings, state: FSMContext, session_factory):
+    if not _is_admin(call.from_user.id if call.from_user else None, settings):
+        await call.answer("Нет доступа", show_alert=True)
+        return
+
+    data = await state.get_data()
+    draft = data.get("broadcast_draft")
+    if not isinstance(draft, dict):
+        await call.answer("Нечего отправлять. Сначала пришлите сообщение.", show_alert=True)
+        return
+
+    db = session_factory()
+    try:
+        tg_ids = [int(x) for x in db.scalars(select(User.telegram_id)).all()]
+    finally:
+        db.close()
+
+    await call.answer("Начинаю рассылку…")
+
+    delivered = 0
+    failed = 0
+    bot = call.bot
+
+    async def _copy(to_chat_id: int, from_chat_id: int, msg_id: int) -> None:
+        nonlocal delivered, failed
+        try:
+            await bot.copy_message(chat_id=to_chat_id, from_chat_id=from_chat_id, message_id=msg_id)
+            delivered += 1
+        except TelegramRetryAfter as e:
+            await asyncio.sleep(float(getattr(e, "retry_after", 1)) + 0.5)
+            try:
+                await bot.copy_message(chat_id=to_chat_id, from_chat_id=from_chat_id, message_id=msg_id)
+                delivered += 1
+            except Exception:
+                failed += 1
+        except (TelegramForbiddenError, TelegramBadRequest, TelegramNetworkError):
+            failed += 1
+        except Exception:
+            failed += 1
+
+    async def _send_album(to_chat_id: int, media: list[dict[str, Any]]) -> bool:
+        nonlocal delivered, failed
+        if len(media) < 2:
+            return False
+        try:
+            ims = []
+            for item in media:
+                t = item.get("type")
+                fid = item.get("file_id")
+                cap = item.get("caption")
+                if not fid or not t:
+                    continue
+                if t == "photo":
+                    ims.append(InputMediaPhoto(media=fid, caption=cap))
+                elif t == "video":
+                    ims.append(InputMediaVideo(media=fid, caption=cap))
+                elif t == "document":
+                    ims.append(InputMediaDocument(media=fid, caption=cap))
+                elif t == "audio":
+                    ims.append(InputMediaAudio(media=fid, caption=cap))
+            if len(ims) < 2:
+                return False
+            await bot.send_media_group(chat_id=to_chat_id, media=ims)
+            delivered += 1
+            return True
+        except TelegramRetryAfter as e:
+            await asyncio.sleep(float(getattr(e, "retry_after", 1)) + 0.5)
+            try:
+                await bot.send_media_group(chat_id=to_chat_id, media=ims)  # type: ignore[name-defined]
+                delivered += 1
+                return True
+            except Exception:
+                failed += 1
+                return True
+        except (TelegramForbiddenError, TelegramBadRequest, TelegramNetworkError):
+            failed += 1
+            return True
+        except Exception:
+            failed += 1
+            return True
+
+    kind = draft.get("kind")
+    from_chat_id = int(draft.get("from_chat_id") or 0)
+
+    for tg_id in tg_ids:
+        if kind == "single":
+            await _copy(int(tg_id), from_chat_id, int(draft.get("message_id")))
+        elif kind == "album":
+            media = draft.get("media") or []
+            if isinstance(media, list) and await _send_album(int(tg_id), media):
+                pass
+            else:
+                # fallback: copy each message from original album
+                for mid in (draft.get("message_ids") or []):
+                    await _copy(int(tg_id), from_chat_id, int(mid))
+                    await asyncio.sleep(0.05)
+        await asyncio.sleep(0.05)
+
+    await state.clear()
+    await call.message.answer(f"✅ Рассылка завершена.\nДоставлено: <b>{delivered}</b>\nОшибок: <b>{failed}</b>")
+    text = await _render_admin_menu_text(telegram_id=call.from_user.id, session_factory=session_factory)
+    await call.message.answer(text, reply_markup=admins_menu_kb())
+
+
 @admin_router.callback_query(F.data == "admin:summary:me")
 async def admin_summary_me(call: CallbackQuery, settings: Settings, session_factory):
     if not _is_admin(call.from_user.id if call.from_user else None, settings):
@@ -337,11 +560,19 @@ async def admin_export_all_summaries_xlsx(call: CallbackQuery, settings: Setting
     ws = wb.active
     ws.title = "summaries"
 
-    headers = ["telegram_id"] + [f"День {p.position}. {p.title}" for p in posts]
+    headers = ["telegram_id", "username"] + [f"День {p.position}. {p.title}" for p in posts]
     ws.append(headers)
 
     for u in users:
-        row: list[object] = [int(u.telegram_id)]
+        username = ""
+        try:
+            chat = await call.bot.get_chat(int(u.telegram_id))
+            if getattr(chat, "username", None):
+                username = f"@{chat.username}"
+        except Exception:
+            username = ""
+
+        row: list[object] = [int(u.telegram_id), username]
         for p in posts:
             parts = answers.get((int(u.id), int(p.id)), [])
             cell = "\n".join([s.strip() for s in parts if (s or "").strip()])
