@@ -574,7 +574,7 @@ async def capture_user_answer(message: Message, settings: Settings, session_fact
         await message.answer(
             f"Спасибо! Ваш ответ записан.\n"
             f"Можно отправить ещё {remaining} сообщ.\n"
-            f"Следующее задание станет доступным через {interval_text} после завершения задания.",
+            f"Следующее задание станет доступным через {interval_text} после завершения задания. Если задание завершено — нажмите кнопку ниже.",
             reply_markup=task_done_kb(post_id=post.id),
             parse_mode=None,
         )
@@ -649,7 +649,7 @@ async def capture_user_answer_reply_always(message: Message, settings: Settings,
         await message.answer(
             f"Спасибо! Ваш ответ записан.\n"
             f"Можно отправить ещё {remaining} сообщ.\n"
-            f"Следующее задание станет доступным через {interval_text} после завершения задания.",
+            f"Следующее задание станет доступным через {interval_text} после завершения задания. Если задание завершено — нажмите кнопку ниже.",
             reply_markup=task_done_kb(post_id=post.id),
             parse_mode=None,
         )
