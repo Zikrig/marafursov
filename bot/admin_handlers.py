@@ -751,7 +751,10 @@ async def admin_save_greeting_media(message: Message, settings: Settings, state:
         media_type = "photo"
         file_id = message.photo[-1].file_id
     else:
-        await message.answer("Нужна картинка (photo) или <code>remove</code>.")
+        await message.answer(
+            "Нужна картинка (photo) или <code>remove</code>.",
+            reply_markup=admin_cancel_greeting_final_kb(),
+        )
         return
     db = session_factory()
     try:
@@ -793,7 +796,10 @@ async def admin_save_final_media(message: Message, settings: Settings, state: FS
         media_type = "photo"
         file_id = message.photo[-1].file_id
     else:
-        await message.answer("Нужна картинка (photo) или <code>remove</code>.")
+        await message.answer(
+            "Нужна картинка (photo) или <code>remove</code>.",
+            reply_markup=admin_cancel_greeting_final_kb(),
+        )
         return
     db = session_factory()
     try:
@@ -966,6 +972,7 @@ async def admin_save_media(message: Message, settings: Settings, state: FSMConte
         return
     data = await state.get_data()
     post_id = int(data["post_id"])
+    page = int(data["page"])
 
     media_type = None
     file_id = None
@@ -976,9 +983,11 @@ async def admin_save_media(message: Message, settings: Settings, state: FSMConte
         media_type = "photo"
         file_id = message.photo[-1].file_id
     else:
-        await message.answer("Нужна картинка (photo) или <code>remove</code>.")
+        await message.answer(
+            "Нужна картинка (photo) или <code>remove</code>.",
+            reply_markup=admin_cancel_edit_post_kb(post_id=post_id, page=page),
+        )
         return
-
     db = session_factory()
     try:
         update_post(db, post_id, media_type=media_type, file_id=file_id)
@@ -1041,9 +1050,11 @@ async def admin_create_media(message: Message, settings: Settings, state: FSMCon
         media_type = "photo"
         file_id = message.photo[-1].file_id
     else:
-        await message.answer("Нужна картинка (photo) или <code>skip</code>.")
+        await message.answer(
+            "Нужна картинка (photo) или <code>skip</code>.",
+            reply_markup=admin_cancel_menu_kb(),
+        )
         return
-
     db = session_factory()
     try:
         post = create_post(db, title=title, text_html=text_html, media_type=media_type, file_id=file_id)

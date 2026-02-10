@@ -438,6 +438,13 @@ async def cmd_summary(message: Message, settings: Settings, session_factory):
 async def start_task_callback(call: CallbackQuery, settings: Settings, session_factory):
     if not call.from_user:
         return
+    
+    # Answer immediately to avoid "query is too old" if photo upload takes time
+    try:
+        await call.answer()
+    except Exception:
+        pass
+
     post_id = int(call.data.split(":", 2)[2])
 
     now = _tznow(settings)
@@ -503,7 +510,7 @@ async def start_task_callback(call: CallbackQuery, settings: Settings, session_f
         # send media if found
         if media:
             try:
-                sent_msg = await call.message.answer_photo(photo=media, caption=text, request_timeout=60)
+                sent_msg = await call.message.answer_photo(photo=media, caption=text, request_timeout=120)
                 # If it was a local file and sent successfully, save the file_id to the DB for future use
                 if is_local_file and sent_msg.photo:
                     post.file_id = sent_msg.photo[-1].file_id
@@ -515,7 +522,6 @@ async def start_task_callback(call: CallbackQuery, settings: Settings, session_f
                 await call.message.answer(text, disable_web_page_preview=True)
         else:
             await call.message.answer(text, disable_web_page_preview=True)
-        await call.answer("Ок ✅")
     finally:
         db.close()
 
