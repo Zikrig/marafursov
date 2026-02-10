@@ -171,6 +171,24 @@ async def _finalize_album_draft(*, key: tuple[int, str], state: FSMContext, chat
         reply_markup=admin_broadcast_confirm_kb(),
     )
 
+async def _smart_edit(call: CallbackQuery, text: str, reply_markup=None, disable_web_page_preview: bool = True):
+    """
+    Helper to edit a message even if it was a photo message (by deleting and resending).
+    """
+    try:
+        await call.message.edit_text(text, reply_markup=reply_markup, disable_web_page_preview=disable_web_page_preview)
+    except TelegramBadRequest as e:
+        msg = str(e).lower()
+        if "message can't be edited" in msg or "there is no text in the message" in msg or "not found" in msg:
+            try:
+                await call.message.delete()
+            except Exception:
+                pass
+            await call.message.answer(text, reply_markup=reply_markup, disable_web_page_preview=disable_web_page_preview)
+        else:
+            raise
+
+
 async def _render_list(call: CallbackQuery, *, page: int, session_factory) -> None:
     db = session_factory()
     try:
@@ -180,7 +198,8 @@ async def _render_list(call: CallbackQuery, *, page: int, session_factory) -> No
     finally:
         db.close()
 
-    await call.message.edit_text(
+    await _smart_edit(
+        call,
         f"Посты (всего: <b>{total}</b>):",
         reply_markup=admins_posts_list_kb(posts=items, page=page, page_size=PAGE_SIZE, total=total),
     )
@@ -212,7 +231,7 @@ async def admin_menu(call: CallbackQuery, settings: Settings, state: FSMContext,
         return
     await state.clear()
     text = await _render_admin_menu_text(telegram_id=call.from_user.id, session_factory=session_factory)
-    await call.message.edit_text(text, reply_markup=admins_menu_kb())
+    await _smart_edit(call, text, reply_markup=admins_menu_kb())
     await call.answer()
 
 
@@ -385,7 +404,7 @@ async def admin_greeting_final(call: CallbackQuery, settings: Settings, state: F
         await call.answer("Нет доступа", show_alert=True)
         return
     await state.clear()
-    await call.message.answer("<b>Приветствие / Финал</b>\n\nВыберите, что редактировать:", reply_markup=admin_greeting_final_kb())
+    await _smart_edit(call, "<b>Приветствие / Финал</b>\n\nВыберите, что редактировать:", reply_markup=admin_greeting_final_kb())
     await call.answer()
 
 
@@ -413,7 +432,7 @@ async def admin_broadcast_cancel(call: CallbackQuery, settings: Settings, state:
         return
     await state.clear()
     text = await _render_admin_menu_text(telegram_id=call.from_user.id, session_factory=session_factory)
-    await call.message.answer("❌ Отменено.\n\n" + text, reply_markup=admins_menu_kb())
+    await _smart_edit(call, "❌ Отменено.\n\n" + text, reply_markup=admins_menu_kb())
     await call.answer()
 
 
@@ -871,10 +890,14 @@ async def admin_open_post(call: CallbackQuery, settings: Settings, session_facto
         await call.answer("Пост не найден", show_alert=True)
         return
 
+    media = None
     media_info = post.media_type or "нет"
-    if not post.file_id:
+    if post.file_id:
+        media = post.file_id
+    else:
         local_path = f"data/images/{post.position}.png"
         if os.path.exists(local_path):
+            media = FSInputFile(local_path)
             media_info = f"default ({post.position}.png)"
 
     body = (
@@ -882,7 +905,17 @@ async def admin_open_post(call: CallbackQuery, settings: Settings, session_facto
         f"Медиа: <b>{media_info}</b>\n\n"
         f"{post.text_html}"
     )
-    await call.message.edit_text(body, reply_markup=admin_edit_post_kb(post_id=post.id, page=page), disable_web_page_preview=True)
+
+    kb = admin_edit_post_kb(post_id=post.id, page=page)
+
+    if media:
+        try:
+            await call.message.delete()
+        except Exception:
+            pass
+        await call.message.answer_photo(photo=media, caption=body, reply_markup=kb)
+    else:
+        await _smart_edit(call, body, reply_markup=kb)
     await call.answer()
 
 
@@ -1083,7 +1116,7 @@ async def admin_reset_me(call: CallbackQuery, settings: Settings, session_factor
         db.close()
     await call.answer("Сброшено ✅", show_alert=True)
     text = await _render_admin_menu_text(telegram_id=call.from_user.id, session_factory=session_factory)
-    await call.message.edit_text(text, reply_markup=admins_menu_kb())
+    await _smart_edit(call, text, reply_markup=admins_menu_kb())
 
 
 @admin_router.callback_query(F.data == "admin:reset:all")
@@ -1102,7 +1135,7 @@ async def admin_reset_all(call: CallbackQuery, settings: Settings, session_facto
         db.close()
     await call.answer("Сброшено для всех ✅", show_alert=True)
     text = await _render_admin_menu_text(telegram_id=call.from_user.id, session_factory=session_factory)
-    await call.message.edit_text(text, reply_markup=admins_menu_kb())
+    await _smart_edit(call, text, reply_markup=admins_menu_kb())
 
 
 
