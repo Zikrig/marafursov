@@ -1,6 +1,7 @@
 import datetime as dt
 import io
 import asyncio
+import os
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -9,7 +10,7 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, FSInputFile
 from aiogram.types import BufferedInputFile
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramNetworkError, TelegramRetryAfter
 from aiogram.types import InputMediaAudio, InputMediaDocument, InputMediaPhoto, InputMediaVideo
@@ -854,9 +855,16 @@ async def admin_open_post(call: CallbackQuery, settings: Settings, session_facto
     if not post:
         await call.answer("Пост не найден", show_alert=True)
         return
+
+    media_info = post.media_type or "нет"
+    if not post.file_id:
+        local_path = f"data/images/{post.position}.png"
+        if os.path.exists(local_path):
+            media_info = f"default ({post.position}.png)"
+
     body = (
         f"<b>День {post.position}. {_h(post.title)}</b>\n"
-        f"Медиа: <b>{post.media_type or 'нет'}</b>\n\n"
+        f"Медиа: <b>{media_info}</b>\n\n"
         f"{post.text_html}"
     )
     await call.message.edit_text(body, reply_markup=admin_edit_post_kb(post_id=post.id, page=page), disable_web_page_preview=True)

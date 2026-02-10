@@ -16,6 +16,11 @@ from bot.seed_posts import seed_posts_from_json
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
+    # Ensure necessary directories exist
+    import os
+    os.makedirs("data/images", exist_ok=True)
+    os.makedirs("bot_data", exist_ok=True)
+
     settings = load_settings()
     engine = make_engine(settings.database_url)
     init_db(engine)

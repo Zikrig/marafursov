@@ -44,13 +44,7 @@ def seed_posts_from_json(*, session_factory, json_path: str, wipe: bool = False)
             if not title:
                 continue
             existing = db.scalar(select(Post).where(Post.position == idx))
-            if existing:
-                existing.title = title
-                existing.text_html = text_html
-                existing.media_type = media_type
-                existing.file_id = file_id
-                existing.updated_at = dt.datetime.now()
-            else:
+            if not existing:
                 p = Post(
                     position=idx,
                     title=title,

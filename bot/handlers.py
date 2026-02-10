@@ -3,11 +3,12 @@ from zoneinfo import ZoneInfo
 
 import asyncio
 from html import escape as _h
+import os
 from aiogram import F, Router
 from aiogram.filters import BaseFilter, Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, FSInputFile
 from aiogram.types import BufferedInputFile
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.enums import ParseMode
@@ -487,9 +488,19 @@ async def start_task_callback(call: CallbackQuery, settings: Settings, session_f
         except Exception:
             pass
 
-        # send media if configured
+        # check for default image if no file_id is set
+        media = None
         if post.media_type == "photo" and post.file_id:
-            await call.message.answer_photo(photo=post.file_id, caption=text)
+            media = post.file_id
+        else:
+            # try local file by day number
+            local_path = f"data/images/{post.position}.png"
+            if os.path.exists(local_path):
+                media = FSInputFile(local_path)
+
+        # send media if found
+        if media:
+            await call.message.answer_photo(photo=media, caption=text)
         else:
             await call.message.answer(text, disable_web_page_preview=True)
         await call.answer("Ок ✅")

@@ -40,7 +40,7 @@ def load_settings() -> Settings:
     database_url = os.getenv("DATABASE_URL", "").strip() or "sqlite:///./bot_data/bot.db"
 
     seed_json_path = os.getenv("SEED_JSON_PATH", "data/challenge_posts.json").strip() or "data/challenge_posts.json"
-    seed_on_start = os.getenv("SEED_ON_START", "1").strip().lower() not in ("0", "false", "no")
+    seed_on_start = os.getenv("SEED_ON_START", "0").strip().lower() not in ("0", "false", "no")
     seed_wipe_on_start = os.getenv("SEED_WIPE_ON_START", "0").strip().lower() in ("1", "true", "yes")
     max_responses_per_task = int(os.getenv("MAX_RESPONSES_PER_TASK", "3").strip() or "3")
 

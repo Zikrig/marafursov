@@ -244,21 +244,23 @@ def init_db(engine) -> None:
                                 conn.exec_driver_sql(f"ALTER TABLE users ADD COLUMN {col} TEXT")
                             elif col == "onboarded_at":
                                 conn.exec_driver_sql("ALTER TABLE users ADD COLUMN onboarded_at DATETIME")
-                            # id/telegram_id/is_admin/created_at are not expected to be missing here
                         conn.commit()
                         users_cols = table_columns("users")
 
-                # Drop in reverse dependency order
-                if responses_cols and responses_cols != expected_responses:
-                    conn.exec_driver_sql("DROP TABLE IF EXISTS responses")
-                if task_runs_cols and task_runs_cols != expected_task_runs:
-                    conn.exec_driver_sql("DROP TABLE IF EXISTS task_runs")
-                if progress_cols and progress_cols != expected_progress:
-                    conn.exec_driver_sql("DROP TABLE IF EXISTS progress")
+                # Best-effort non-destructive migration for `posts` (ADD COLUMN only).
                 if posts_cols and posts_cols != expected_posts:
-                    conn.exec_driver_sql("DROP TABLE IF EXISTS posts")
-                if users_cols and users_cols != expected_users:
-                    conn.exec_driver_sql("DROP TABLE IF EXISTS users")
+                    missing = expected_posts - posts_cols
+                    extra = posts_cols - expected_posts
+                    if missing and not extra:
+                        for col in sorted(missing):
+                            if col in ("title", "text_html", "file_id"):
+                                conn.exec_driver_sql(f"ALTER TABLE posts ADD COLUMN {col} TEXT")
+                            elif col == "media_type":
+                                conn.exec_driver_sql("ALTER TABLE posts ADD COLUMN media_type VARCHAR(20)")
+                            elif col == "updated_at":
+                                conn.exec_driver_sql("ALTER TABLE posts ADD COLUMN updated_at DATETIME")
+                        conn.commit()
+                        posts_cols = table_columns("posts")
 
                 # Best-effort non-destructive migration for `app_settings` (ADD COLUMN only).
                 if app_settings_cols and app_settings_cols != expected_app_settings:
@@ -275,10 +277,24 @@ def init_db(engine) -> None:
                                 conn.exec_driver_sql(f"ALTER TABLE app_settings ADD COLUMN {col} TEXT")
                             elif col in ("greeting_media_type", "final_media_type"):
                                 conn.exec_driver_sql(f"ALTER TABLE app_settings ADD COLUMN {col} VARCHAR(20)")
-                            # ints/dates should already exist; keep safe
+                            elif col in ("response_window_minutes", "send_interval_minutes"):
+                                conn.exec_driver_sql(f"ALTER TABLE app_settings ADD COLUMN {col} INTEGER DEFAULT 0")
+                            elif col == "updated_at":
+                                conn.exec_driver_sql("ALTER TABLE app_settings ADD COLUMN updated_at DATETIME")
                         conn.commit()
                         app_settings_cols = table_columns("app_settings")
 
+                # Drop in reverse dependency order only if still not matching
+                if responses_cols and responses_cols != expected_responses:
+                    conn.exec_driver_sql("DROP TABLE IF EXISTS responses")
+                if task_runs_cols and task_runs_cols != expected_task_runs:
+                    conn.exec_driver_sql("DROP TABLE IF EXISTS task_runs")
+                if progress_cols and progress_cols != expected_progress:
+                    conn.exec_driver_sql("DROP TABLE IF EXISTS progress")
+                if posts_cols and posts_cols != expected_posts:
+                    conn.exec_driver_sql("DROP TABLE IF EXISTS posts")
+                if users_cols and users_cols != expected_users:
+                    conn.exec_driver_sql("DROP TABLE IF EXISTS users")
                 if app_settings_cols and app_settings_cols != expected_app_settings:
                     conn.exec_driver_sql("DROP TABLE IF EXISTS app_settings")
 
