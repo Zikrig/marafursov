@@ -37,7 +37,13 @@ async def main() -> None:
         except Exception:
             logging.getLogger(__name__).exception("Failed to seed posts from %s", settings.seed_json_path)
 
-    bot = Bot(token=settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    from aiogram.client.session.aiohttp import AiohttpSession
+    session = AiohttpSession(timeout=60)
+    bot = Bot(
+        token=settings.bot_token, 
+        session=session,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+    )
     dp = Dispatcher()
     dp["settings"] = settings
     dp["session_factory"] = session_factory

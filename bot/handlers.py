@@ -490,6 +490,7 @@ async def start_task_callback(call: CallbackQuery, settings: Settings, session_f
 
         # check for default image if no file_id is set
         media = None
+        is_local_file = False
         if post.media_type == "photo" and post.file_id:
             media = post.file_id
         else:
@@ -497,10 +498,21 @@ async def start_task_callback(call: CallbackQuery, settings: Settings, session_f
             local_path = f"data/images/{post.position}.png"
             if os.path.exists(local_path):
                 media = FSInputFile(local_path)
+                is_local_file = True
 
         # send media if found
         if media:
-            await call.message.answer_photo(photo=media, caption=text)
+            try:
+                sent_msg = await call.message.answer_photo(photo=media, caption=text, request_timeout=60)
+                # If it was a local file and sent successfully, save the file_id to the DB for future use
+                if is_local_file and sent_msg.photo:
+                    post.file_id = sent_msg.photo[-1].file_id
+                    post.media_type = "photo"
+                    db.commit()
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error("Failed to send photo for post %s: %s", post.id, e)
+                await call.message.answer(text, disable_web_page_preview=True)
         else:
             await call.message.answer(text, disable_web_page_preview=True)
         await call.answer("Ок ✅")

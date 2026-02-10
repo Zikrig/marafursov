@@ -52,6 +52,9 @@ from bot.keyboards import (
     admins_menu_kb,
     admins_posts_list_kb,
     admin_greeting_final_kb,
+    admin_cancel_edit_post_kb,
+    admin_cancel_greeting_final_kb,
+    admin_cancel_menu_kb,
 )
 
 admin_router = Router()
@@ -235,6 +238,7 @@ async def admin_greeting(call: CallbackQuery, settings: Settings, state: FSMCont
         f"{_h(current)}\n\n"
         "Пришлите новый текст приветствия:",
         disable_web_page_preview=True,
+        reply_markup=admin_cancel_greeting_final_kb(),
     )
     await call.answer()
 
@@ -257,6 +261,7 @@ async def admin_greeting_media(call: CallbackQuery, settings: Settings, state: F
         f"Текущее медиа: <b>{_h(current)}</b>\n\n"
         "Пришлите <b>картинку</b> (photo) или текст <code>remove</code>, чтобы убрать:",
         disable_web_page_preview=True,
+        reply_markup=admin_cancel_greeting_final_kb(),
     )
     await call.answer()
 
@@ -279,6 +284,7 @@ async def admin_final_text(call: CallbackQuery, settings: Settings, state: FSMCo
         f"{_h(current)}\n\n"
         "Пришлите новый текст финального сообщения:",
         disable_web_page_preview=True,
+        reply_markup=admin_cancel_greeting_final_kb(),
     )
     await call.answer()
 
@@ -301,6 +307,7 @@ async def admin_final_media(call: CallbackQuery, settings: Settings, state: FSMC
         f"Текущее медиа: <b>{_h(current)}</b>\n\n"
         "Пришлите <b>картинку</b> (photo) или текст <code>remove</code>, чтобы убрать:",
         disable_web_page_preview=True,
+        reply_markup=admin_cancel_greeting_final_kb(),
     )
     await call.answer()
 
@@ -320,7 +327,8 @@ async def admin_resp_window(call: CallbackQuery, settings: Settings, state: FSMC
     await state.set_state(AdminEditFSM.response_window)
     await call.message.answer(
         f"Текущее окно ответа: <b>{current} мин</b>\n\n"
-        "Пришлите новое значение (целое число минут, минимум 1):"
+        "Пришлите новое значение (целое число минут, минимум 1):",
+        reply_markup=admin_cancel_menu_kb(),
     )
     await call.answer()
 
@@ -365,7 +373,8 @@ async def admin_send_interval(call: CallbackQuery, settings: Settings, state: FS
     await state.set_state(AdminEditFSM.send_interval)
     await call.message.answer(
         f"Текущий интервал рассылки: <b>{current} мин</b>\n\n"
-        "Пришлите новое значение (целое число минут, минимум 1):"
+        "Пришлите новое значение (целое число минут, минимум 1):",
+        reply_markup=admin_cancel_menu_kb(),
     )
     await call.answer()
 
@@ -880,7 +889,10 @@ async def admin_edit_title(call: CallbackQuery, settings: Settings, state: FSMCo
     await state.clear()
     await state.set_state(AdminEditFSM.title)
     await state.update_data(post_id=int(post_id_s), page=int(page_s))
-    await call.message.answer("Введите новое <b>название</b> (без «День X.»):")
+    await call.message.answer(
+        "Введите новое <b>название</b> (без «День X.»):",
+        reply_markup=admin_cancel_edit_post_kb(post_id=int(post_id_s), page=int(page_s)),
+    )
     await call.answer()
 
 
@@ -893,7 +905,10 @@ async def admin_edit_text(call: CallbackQuery, settings: Settings, state: FSMCon
     await state.clear()
     await state.set_state(AdminEditFSM.text)
     await state.update_data(post_id=int(post_id_s), page=int(page_s))
-    await call.message.answer("Пришлите новый <b>текст</b> (HTML-разметка Telegram допустима):")
+    await call.message.answer(
+        "Пришлите новый <b>текст</b> (HTML-разметка Telegram допустима):",
+        reply_markup=admin_cancel_edit_post_kb(post_id=int(post_id_s), page=int(page_s)),
+    )
     await call.answer()
 
 
@@ -906,7 +921,10 @@ async def admin_edit_media(call: CallbackQuery, settings: Settings, state: FSMCo
     await state.clear()
     await state.set_state(AdminEditFSM.media)
     await state.update_data(post_id=int(post_id_s), page=int(page_s))
-    await call.message.answer("Пришлите <b>картинку</b> (photo) для поста или текст <code>remove</code>, чтобы убрать картинку:")
+    await call.message.answer(
+        "Пришлите <b>картинку</b> (photo) для поста или текст <code>remove</code>, чтобы убрать картинку:",
+        reply_markup=admin_cancel_edit_post_kb(post_id=int(post_id_s), page=int(page_s)),
+    )
     await call.answer()
 
 
@@ -977,7 +995,10 @@ async def admin_create(call: CallbackQuery, settings: Settings, state: FSMContex
         return
     await state.clear()
     await state.set_state(AdminEditFSM.create_title)
-    await call.message.answer("Введите <b>название</b> нового поста (без «День X.»):")
+    await call.message.answer(
+        "Введите <b>название</b> нового поста (без «День X.»):",
+        reply_markup=admin_cancel_menu_kb(),
+    )
     await call.answer()
 
 
@@ -991,7 +1012,7 @@ async def admin_create_title(message: Message, settings: Settings, state: FSMCon
         return
     await state.update_data(create_title=title)
     await state.set_state(AdminEditFSM.create_text)
-    await message.answer("Пришлите <b>текст</b> нового поста:")
+    await message.answer("Пришлите <b>текст</b> нового поста:", reply_markup=admin_cancel_menu_kb())
 
 
 @admin_router.message(AdminEditFSM.create_text)
@@ -1001,7 +1022,7 @@ async def admin_create_text(message: Message, settings: Settings, state: FSMCont
     txt = message.html_text or message.text or ""
     await state.update_data(create_text=txt)
     await state.set_state(AdminEditFSM.create_media)
-    await message.answer("Пришлите <b>картинку</b> (photo) или напишите <code>skip</code>:")
+    await message.answer("Пришлите <b>картинку</b> (photo) или напишите <code>skip</code>:", reply_markup=admin_cancel_menu_kb())
 
 
 @admin_router.message(AdminEditFSM.create_media)

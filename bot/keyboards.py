@@ -111,6 +111,24 @@ def admin_edit_post_kb(*, post_id: int, page: int) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def admin_cancel_edit_post_kb(*, post_id: int, page: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="❌ Отмена", callback_data=f"admin:edit:{post_id}:{page}"))
+    return kb.as_markup()
+
+
+def admin_cancel_greeting_final_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="❌ Отмена", callback_data="admin:greeting_final"))
+    return kb.as_markup()
+
+
+def admin_cancel_menu_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="❌ Отмена", callback_data="admin:menu"))
+    return kb.as_markup()
+
+
  
 
 
